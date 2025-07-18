@@ -1,0 +1,22 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+
+# --- Environments / Packages ---
+workspace/
+.venv/
+env/
+*.egg-info/
+
+# --- IDE / Editor ---
+.idea/
+
+# --- Build & Logs ---
+build/
+results/
+*.log
+
+# --- SOFA artefacts (falls lokal kompiliert) ---
+bin/
+lib/
+install/
