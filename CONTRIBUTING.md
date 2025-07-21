@@ -111,17 +111,4 @@ experiments/        # one‑off notebooks, scratch scripts
 
 ---
 
-### Submodule workflow (TL;DR)
-
-```bash
-# init after fresh clone
-git submodule update --init --recursive
-
-# update to latest upstream commits
-git submodule update --remote --merge
-# then commit pointer change
-```
-
----
-
 *Questions? Create an issue or ping ****@HannesDeittert****.*
