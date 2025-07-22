@@ -25,12 +25,6 @@ Filling hints (only visible while editing):
   summarising results and linking to code, logs, figures, docs.
 -->
 
-## 📄 Name  
-<!-- Replace the placeholder below with a concise name. -->
-<Experiment title here>
-
----
-
 ## 🧐 Context / Objective  
 <!-- Why are you running this experiment?  Briefly describe the goal
      or hypothesis and how it fits into the master‑thesis project. -->
