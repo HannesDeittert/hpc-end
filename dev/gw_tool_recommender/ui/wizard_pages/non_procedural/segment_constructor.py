@@ -329,7 +329,7 @@ class SegmentConstructorPage(QWizardPage):
         # 2) Write tool_definition.json
         with open(os.path.join(base_dir, 'tool_definition.json'), 'w') as f:
             json.dump(
-                {'name': tool_name, 'description': wiz.field('nonDesc') or ""},
+                {'name': tool_name, 'description': wiz.field('nonDesc') or "", 'type': "non procedural"},
                 f, indent=2
             )
 

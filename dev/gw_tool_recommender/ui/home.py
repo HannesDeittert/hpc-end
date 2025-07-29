@@ -1,4 +1,4 @@
-# ui/home.py
+import os, json
 from PyQt5.QtWidgets import (
     QWidget,
     QTreeWidget,
@@ -57,20 +57,43 @@ class HomeWidget(QWidget):
         self.setLayout(main_layout)
 
     def _populate_tree(self):
-        tools = {
-            "Tool A": ["Agent A1", "Agent A2"],
-            "Tool B": ["Agent B1", "Agent B2", "Agent B3"],
-            "Tool C": [],
-        }
+        # Determine the data directory (one level up from ui folder)
+        base_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', 'data')
+        )
+        self.tree.clear()
 
-        for tool_name, agents in tools.items():
-            tool_item = QTreeWidgetItem([tool_name, ""])
+        if not os.path.isdir(base_dir):
+            return
+
+        for tool_dir in sorted(os.listdir(base_dir)):
+            tool_path = os.path.join(base_dir, tool_dir)
+            if not os.path.isdir(tool_path):
+                continue
+
+            # Read tool_definition.json to get display name
+            def_file = os.path.join(tool_path, 'tool_definition.json')
+            try:
+                with open(def_file, 'r') as f:
+                    definition = json.load(f)
+                tool_name = definition.get('name', tool_dir)
+            except Exception:
+                tool_name = tool_dir
+
+            # Create tree item for tool
+            tool_item = QTreeWidgetItem([tool_name, ''])
             tool_item.setFlags(tool_item.flags() | Qt.ItemIsSelectable)
             self.tree.addTopLevelItem(tool_item)
 
-            if agents:
-                for agent_name in agents:
-                    agent_item = QTreeWidgetItem([agent_name, ""])
+            # Populate agents under this tool
+            agents_path = os.path.join(tool_path, 'agents')
+            if os.path.isdir(agents_path) and os.listdir(agents_path):
+                for agent_dir in sorted(os.listdir(agents_path)):
+                    full_agent_path = os.path.join(agents_path, agent_dir)
+                    if not os.path.isdir(full_agent_path):
+                        continue
+
+                    agent_item = QTreeWidgetItem([agent_dir, ''])
                     agent_item.setFlags(agent_item.flags() | Qt.ItemIsSelectable)
                     tool_item.addChild(agent_item)
 
@@ -78,7 +101,7 @@ class HomeWidget(QWidget):
                     btn.setCheckable(True)
                     btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
                     btn.toggled.connect(
-                        lambda checked, a=agent_name, it=agent_item:
+                        lambda checked, a=agent_dir, it=agent_item:
                             self._toggle_agent(a, it, checked)
                     )
                     self.tree.setItemWidget(agent_item, 1, btn)
@@ -114,6 +137,7 @@ class HomeWidget(QWidget):
             self.detail.setHtml(f"ℹ️ <b>{name}</b> (not selected).<br>Click “Select” to pick it.")
         else:
             self.detail.clear()
+
 
 
 

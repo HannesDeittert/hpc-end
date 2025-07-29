@@ -36,6 +36,10 @@ class DeviceTypePage(QWizardPage):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
+        for btn in (self.proc_btn, self.nonproc_btn):
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+
     def initializePage(self):
         # Hide the default Next/Back buttons
         self.wizard().button(self.wizard().NextButton).hide()
