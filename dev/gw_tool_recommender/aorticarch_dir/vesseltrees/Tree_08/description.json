@@ -1,0 +1,18 @@
+{
+    "arch_type": "IV",
+    "seed": 1008,
+    "rotation_yzx_deg": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "scaling_xyzd": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "omit_axis": null,
+    "simulation_mesh": "mesh/simulationmesh.obj",
+    "visu_mesh": "mesh/visumesh.obj"
+}
