@@ -2,6 +2,7 @@
 
 from PyQt5.QtWidgets import QWizard
 from .wizard_pages.device_type import DeviceTypePage
+from .wizard_pages.model_select import ModelSelectPage
 from .wizard_pages.procedural.general_params import GeneralParamsPage as ProceduralGeneralParamsPage
 from .wizard_pages.procedural.shape_params import ShapeParamsPage as ProceduralShapeParamsPage
 from .wizard_pages.procedural.material_params import MaterialParamsPage as ProceduralMaterialParamsPage
@@ -14,14 +15,21 @@ from .wizard_pages.non_procedural.material_params import MaterialParamsPage as N
 from .wizard_pages.non_procedural.simulation_params import SimulationParamsPage as NonProceduralSimulationParamsPage
 from .wizard_pages.non_procedural.segment_constructor import SegmentConstructorPage as NonProceduralSegmentParamsPage
 class ToolWizard(QWizard):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, model_name=None):
         super().__init__(parent)
         self.setWindowTitle("New Tool Wizard")
+        self.model_name = model_name
 
         # — Core branching pages —
         dev_page = DeviceTypePage(self)
         self.page_device_type = dev_page
         self.page_device_type_id = self.addPage(dev_page)
+
+        model_page = None
+        if self.model_name is None:
+            model_page = ModelSelectPage(self)
+            self.page_model_select = model_page
+            self.page_model_select_id = self.addPage(model_page)
 
         # Procedural branch: start at general params
         proc_page = ProceduralGeneralParamsPage(self)
@@ -72,25 +80,23 @@ class ToolWizard(QWizard):
     def nextId(self):
         # if we’re on the device‑type page…
         if self.currentId() == self.page_device_type_id:
-            # choose which branch’s *start* page ID
-            return (
-                self.page_proc_start_id
-                if getattr(self, "isProcedural", False)
-                else self.page_nonproc_start_id
-            )
+            if getattr(self, "model_name", None) is None:
+                return self.page_model_select_id
+            return self.page_proc_start_id if getattr(self, "isProcedural", False) else self.page_nonproc_start_id
+        if getattr(self, "model_name", None) is None and self.currentId() == getattr(self, "page_model_select_id", -1):
+            return self.page_proc_start_id if getattr(self, "isProcedural", False) else self.page_nonproc_start_id
         # otherwise fall back to normal sequencing
         return super().nextId()
 
     def _on_page_changed(self, page_id: int):
         btn_next = self.button(QWizard.NextButton)
         btn_back = self.button(QWizard.BackButton)
-        if page_id == self.page_device_type:
+        if page_id == self.page_device_type_id:
             btn_next.hide()
             btn_back.hide()
         else:
             btn_next.show()
             btn_back.show()
-
 
 
 

@@ -172,7 +172,17 @@ def train_sac(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tool", required=True, help="device name under data/<tool>/tool.py")
+    parser.add_argument(
+        "--tool",
+        required=True,
+        help="Wire name, or 'model/wire' for model-scoped wires.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Optional model name (prepended if --tool has no '/').",
+    )
     parser.add_argument("--steps", type=int, default=200_000)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
@@ -183,7 +193,11 @@ def main():
     parser.add_argument("--out", default=str(REPO_ROOT / "results" / "first_agent"))
     args = parser.parse_args()
 
-    env = build_env(args.tool, seed=0)
+    tool_ref = args.tool
+    if args.model and "/" not in tool_ref:
+        tool_ref = f"{args.model}/{tool_ref}"
+
+    env = build_env(tool_ref, seed=0)
     train_sac(
         env=env,
         steps=args.steps,

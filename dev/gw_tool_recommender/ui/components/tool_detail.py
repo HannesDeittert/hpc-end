@@ -1,7 +1,6 @@
 import os
 import json
 import shutil
-from pathlib import Path
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog,
@@ -15,29 +14,22 @@ from PyQt5.QtWidgets import (
     QSizePolicy
 )
 
-
-def _repo_root() -> Path:
-    here = Path(__file__).resolve()
-    for parent in (here.parent, *here.parents):
-        if (parent / ".git").exists():
-            return parent
-    return here.parents[-1]
+from dev.gw_tool_recommender.storage import wire_dir, wire_definition_path
 
 
 class ToolDetailDialog(QDialog):
-    def __init__(self, tool_dir: str, parent=None):
+    def __init__(self, model_name: str, wire_name: str, parent=None):
         super().__init__(parent)
-        self.tool_dir = tool_dir
+        self.model_name = model_name
+        self.wire_name = wire_name
 
-        # Determine base data path and tool-specific paths
-        self.data_root = str(_repo_root() / "data")
-        tool_path = os.path.join(self.data_root, tool_dir)
-        def_path = os.path.join(tool_path, "tool_definition.json")
+        self.tool_path = str(wire_dir(model_name, wire_name))
+        def_path = str(wire_definition_path(model_name, wire_name))
 
         # Load tool definition
         with open(def_path, 'r') as f:
             definition = json.load(f)
-        name = definition.get('name', tool_dir)
+        name = definition.get('name', wire_name)
         desc = definition.get('description', '')
 
         # Dialog settings
@@ -84,7 +76,7 @@ class ToolDetailDialog(QDialog):
         main_layout.addWidget(divider)
 
         # --- Agents List ---
-        agents_path = os.path.join(tool_path, 'agents')
+        agents_path = os.path.join(self.tool_path, 'agents')
         if os.path.isdir(agents_path) and os.listdir(agents_path):
             for agent in sorted(os.listdir(agents_path)):
                 agent_dir = os.path.join(agents_path, agent)
@@ -152,8 +144,7 @@ class ToolDetailDialog(QDialog):
         )
         if ok and text == 'delete agent':
             agent_path = os.path.join(
-                self.data_root,
-                self.tool_dir,
+                self.tool_path,
                 'agents',
                 agent_name
             )

@@ -1,15 +1,8 @@
 import os, json
-from pathlib import Path
 from PyQt5.QtWidgets import QWizardPage, QLabel, QVBoxLayout, QWizard
 from PyQt5.QtCore import pyqtSignal
 
-
-def _repo_root() -> Path:
-    here = Path(__file__).resolve()
-    for parent in (here.parent, *here.parents):
-        if (parent / ".git").exists():
-            return parent
-    return here.parents[-1]
+from dev.gw_tool_recommender.storage import ensure_model, wire_agents_dir, wire_dir
 
 
 class ReviewPage(QWizardPage):
@@ -56,6 +49,7 @@ class ReviewPage(QWizardPage):
 
     def _save_procedural_tool(self):
         wiz = self.wizard()
+        model_name = getattr(wiz, "model_name", None) or "DefaultModel"
 
         # --- General params (from ProceduralGeneralParamsPage) ---
         gen_page = wiz.page_proc_start
@@ -93,16 +87,18 @@ class ReviewPage(QWizardPage):
         rot_spd = sim_pg.rot_speed_spin.value()
 
         # --- prepare output dirs ---
-        base = str(_repo_root() / "data" / tool_name)
+        ensure_model(model_name)
+        base = str(wire_dir(model_name, tool_name))
         os.makedirs(base, exist_ok=True)
-        os.makedirs(os.path.join(base, 'agents'), exist_ok=True)
+        os.makedirs(str(wire_agents_dir(model_name, tool_name)), exist_ok=True)
 
         # --- write JSON definition ---
         with open(os.path.join(base, 'tool_definition.json'), 'w') as f:
             json.dump({
                 'name': tool_name,
                 'description': tool_desc,
-                'type': 'procedural'
+                'type': 'procedural',
+                'model': model_name,
             }, f, indent=2)
 
         # --- generate Python source ---

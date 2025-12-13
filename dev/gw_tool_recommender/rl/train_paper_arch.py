@@ -100,7 +100,17 @@ def build_intervention(tool_name: str, seed: int = 30) -> eve.intervention.MonoP
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Paper SAC training from local devices")
-    parser.add_argument("--tool", required=True, help="device folder under data/<tool>/tool.py")
+    parser.add_argument(
+        "--tool",
+        required=True,
+        help="Wire name, or 'model/wire' for model-scoped wires.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Optional model name (prepended if --tool has no '/').",
+    )
     parser.add_argument(
         "-nw", "--n_worker", type=int, default=2, help="Number of workers"
     )
@@ -161,6 +171,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     mp.set_start_method("spawn", force=True)
     args = parse_args()
+    tool_ref = args.tool
+    if args.model and "/" not in tool_ref:
+        tool_ref = f"{args.model}/{tool_ref}"
 
     trainer_device = torch.device(args.device)
     worker_device = torch.device("cpu")
@@ -190,7 +203,7 @@ def main() -> None:
         force=True,
     )
 
-    intervention = build_intervention(args.tool)
+    intervention = build_intervention(tool_ref)
     intervention_eval = deepcopy(intervention)
 
     env_train = BenchEnv(intervention=intervention, mode="train", visualisation=False)

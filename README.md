@@ -29,6 +29,7 @@ master-project/
 │   ├── tool_compare/
 ├── experiments/                # notebooks, adhoc scripts
 ├── docs/                       # images, thesis diagrams, reports
+├── data/                       # user-created models & wires (UI output)
 ├── .gitignore
 ├── .gitmodules                 # records the submodule URLs & paths
 ├── CONTRIBUTING.md             # guideline for contributing and working with the project
@@ -68,6 +69,16 @@ $ python third_party/stEVE/examples/function_check.py
 ```
 
 ---
+## Models & wires
+
+The UI stores your created assets under `data/`:
+
+- `data/<model>/model_definition.json`
+- `data/<model>/wires/<wire>/tool.py`
+- `data/<model>/wires/<wire>/tool_definition.json`
+- `data/<model>/wires/<wire>/agents/` (optional training artifacts)
+
+---
 ## Install SOFA with SofaPython3 & BeamAdapter
 
 You have **two ways** to get SOFA (incl. SofaPython3 and BeamAdapter) up and running. *For almost everyone, downloading the official binaries is the fastest and most reliable path.*
@@ -99,4 +110,3 @@ If you need a custom build (other branch, debug symbols, ARM Linux…), follow 
 
 > **Maintainer**  Hannes Deittert\
 > **Last update**  2025‑07‑21
-

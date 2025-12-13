@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import importlib.util
 import inspect
 from dataclasses import is_dataclass
@@ -8,24 +6,13 @@ from types import ModuleType
 from typing import Any, Dict, List, Optional, Type
 
 
-HERE = Path(__file__).resolve()
+from dev.gw_tool_recommender.storage import data_root, list_models, parse_wire_ref, wire_py_path
 
 
-def _repo_root() -> Path:
-    for parent in (HERE.parent, *HERE.parents):
-        if (parent / ".git").exists():
-            return parent
-    return HERE.parents[-1]
+DATA_DIR = data_root()
 
-
-PROJECT_ROOT = _repo_root()
-
-# Canonical location for stored tools/devices.
-# The UI writes to <repo>/data/<tool_name>/tool.py.
-DATA_DIR = PROJECT_ROOT / "data"
-
-# Backward-compatible fallback if older runs wrote under dev/...
-LEGACY_DATA_DIR = PROJECT_ROOT / "dev" / "gw_tool_recommender" / "data"
+# Legacy fallback if older runs wrote tools directly under data/<tool>/tool.py
+LEGACY_FLAT_DATA_DIR = DATA_DIR
 
 
 def _load_module_from_path(module_name: str, path: Path) -> ModuleType:
@@ -38,15 +25,23 @@ def _load_module_from_path(module_name: str, path: Path) -> ModuleType:
 
 
 def list_devices(data_dir: Path = DATA_DIR) -> List[str]:
-    """Return all device/tool names available under data/<name>/tool.py.
+    """Return available device refs.
 
-    Searches canonical data_dir first, then legacy fallback.
+    New layout: data/<model>/wires/<wire>/tool.py -> "model/wire"
+    Legacy layout: data/<wire>/tool.py -> "wire"
     """
     names: List[str] = []
-    for base in (data_dir, LEGACY_DATA_DIR):
-        if not base.exists():
+
+    for model in list_models():
+        model_dir = data_dir / model / "wires"
+        if not model_dir.exists():
             continue
-        for child in sorted(base.iterdir()):
+        for wire in sorted(model_dir.iterdir()):
+            if wire.is_dir() and (wire / "tool.py").exists():
+                names.append(f"{model}/{wire.name}")
+
+    if LEGACY_FLAT_DATA_DIR.exists():
+        for child in sorted(LEGACY_FLAT_DATA_DIR.iterdir()):
             if child.is_dir() and (child / "tool.py").exists():
                 if child.name not in names:
                     names.append(child.name)
@@ -58,22 +53,39 @@ def load_device_class(
     data_dir: Path = DATA_DIR,
     expected_class_name: Optional[str] = None,
 ) -> Type[Any]:
-    """Load the device class from data/<tool_name>/tool.py.
+    """Load the device class from the stored tool module.
 
-    By default it looks for a class matching tool_name. If not found,
-    it returns the first dataclass-like class in the module.
+    Accepts either:
+    - "model/wire" (preferred): data/<model>/wires/<wire>/tool.py
+    - "wire" (legacy): data/<wire>/tool.py
     """
-    tool_py = data_dir / tool_name / "tool.py"
-    if not tool_py.exists():
-        legacy_py = LEGACY_DATA_DIR / tool_name / "tool.py"
-        if legacy_py.exists():
-            tool_py = legacy_py
-        else:
+    model, wire = parse_wire_ref(tool_name)
+
+    if model:
+        tool_py = wire_py_path(model, wire)
+        if not tool_py.exists():
             raise FileNotFoundError(f"No tool.py for '{tool_name}' at {tool_py}")
+    else:
+        tool_py = data_dir / wire / "tool.py"
+        if not tool_py.exists():
+            matches: List[Path] = []
+            for m in list_models():
+                candidate = wire_py_path(m, wire)
+                if candidate.exists():
+                    matches.append(candidate)
+            if len(matches) == 1:
+                tool_py = matches[0]
+            elif len(matches) > 1:
+                refs = ", ".join(f"{p.parents[1].name}/{p.parent.name}" for p in matches)
+                raise FileNotFoundError(
+                    f"Ambiguous wire name '{wire}'. Use one of: {refs}"
+                )
+            else:
+                raise FileNotFoundError(f"No tool.py for '{tool_name}' at {tool_py}")
 
     mod = _load_module_from_path(f"gw_tool_{tool_name}", tool_py)
 
-    class_name = expected_class_name or tool_name
+    class_name = expected_class_name or wire
     if hasattr(mod, class_name):
         cls = getattr(mod, class_name)
         if inspect.isclass(cls):

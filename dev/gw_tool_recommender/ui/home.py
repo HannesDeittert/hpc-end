@@ -1,5 +1,4 @@
 import os, json, importlib.util, traceback
-from pathlib import Path
 import pyvista as pv
 from pyvistaqt import QtInteractor
 from PyQt5.QtWidgets import (
@@ -18,14 +17,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from dev.gw_tool_recommender.ui.components.vessel_select_dialog import VesselSelectionDialog
-
-
-def _repo_root() -> Path:
-    here = Path(__file__).resolve()
-    for parent in (here.parent, *here.parents):
-        if (parent / ".git").exists():
-            return parent
-    return here.parents[-1]
+from dev.gw_tool_recommender.storage import data_root, list_models, list_wires, wire_agents_dir
 
 
 class HomeWidget(QWidget):
@@ -82,57 +74,53 @@ class HomeWidget(QWidget):
     # Populate tree from <project>/data
     # ===================================================================
     def _populate_tree(self):
-        base_dir = str(_repo_root() / "data")
+        base_dir = str(data_root())
         self.tree.clear()
         if not os.path.isdir(base_dir):
             return
 
-        for tool_dir in sorted(os.listdir(base_dir)):
-            tool_path = os.path.join(base_dir, tool_dir)
-            if not os.path.isdir(tool_path):
+        for model in list_models():
+            model_item = QTreeWidgetItem([model, ""])
+            model_item.setFlags(model_item.flags() | Qt.ItemIsSelectable)
+            self.tree.addTopLevelItem(model_item)
+
+            wires = list_wires(model)
+            if not wires:
+                none_item = QTreeWidgetItem(["(no wires)", ""])
+                none_item.setDisabled(True)
+                model_item.addChild(none_item)
                 continue
 
-            # Display name from JSON
-            def_path = os.path.join(tool_path, "tool_definition.json")
-            try:
-                with open(def_path, "r") as fp:
-                    definition = json.load(fp)
-                tool_name = definition.get("name", tool_dir)
-            except Exception:
-                tool_name = tool_dir
+            for wire in wires:
+                wire_item = QTreeWidgetItem([wire, ""])
+                wire_item.setFlags(wire_item.flags() | Qt.ItemIsSelectable)
+                model_item.addChild(wire_item)
 
-            tool_item = QTreeWidgetItem([tool_name, ""])
-            tool_item.setFlags(tool_item.flags() | Qt.ItemIsSelectable)
-            self.tree.addTopLevelItem(tool_item)
+                agents_path = wire_agents_dir(model, wire)
+                if agents_path.exists():
+                    for agent_dir in sorted(p.name for p in agents_path.iterdir() if p.is_dir()):
+                        agent_id = f"{model}/{wire}:{agent_dir}"
+                        agent_item = QTreeWidgetItem([agent_dir, ""])
+                        agent_item.setData(0, Qt.UserRole, agent_id)
+                        agent_item.setFlags(agent_item.flags() | Qt.ItemIsSelectable)
+                        wire_item.addChild(agent_item)
 
-            # Agents
-            agents_path = os.path.join(tool_path, "agents")
-            if os.path.isdir(agents_path):
-                for agent_dir in sorted(os.listdir(agents_path)):
-                    full_agent = os.path.join(agents_path, agent_dir)
-                    if not os.path.isdir(full_agent):
-                        continue
+                        btn = QPushButton("Select")
+                        btn.setCheckable(True)
+                        btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                        btn.setFixedSize(60, 22)
+                        font = btn.font()
+                        font.setPointSize(8)
+                        btn.setFont(font)
+                        btn.toggled.connect(
+                            lambda checked, a=agent_id, it=agent_item: self._toggle_agent(a, it, checked)
+                        )
 
-                    agent_item = QTreeWidgetItem([agent_dir, ""])
-                    agent_item.setFlags(agent_item.flags() | Qt.ItemIsSelectable)
-                    tool_item.addChild(agent_item)
-
-                    btn = QPushButton("Select")
-                    btn.setCheckable(True)
-                    btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-                    btn.setFixedSize(60, 22)  # shrink the button
-                    font = btn.font()
-                    font.setPointSize(8)  # optional: smaller text
-                    btn.setFont(font)
-                    btn.toggled.connect(
-                        lambda checked, a=agent_dir, it=agent_item: self._toggle_agent(a, it, checked)
-                    )
-
-                    self.tree.setItemWidget(agent_item, 1, btn)
-            else:
-                none_item = QTreeWidgetItem(["(no agents)", ""])
-                none_item.setDisabled(True)
-                tool_item.addChild(none_item)
+                        self.tree.setItemWidget(agent_item, 1, btn)
+                else:
+                    none_item = QTreeWidgetItem(["(no agents)", ""])
+                    none_item.setDisabled(True)
+                    wire_item.addChild(none_item)
 
         self.tree.expandAll()
 
@@ -156,8 +144,9 @@ class HomeWidget(QWidget):
 
     def _on_item_clicked(self, item, column):
         name = item.text(0)
-        if name in self.selected_agents:
-            self.detail.setHtml(f"<b>✅ {name}</b> is selected.<br><br>More info…")
+        agent_id = item.data(0, Qt.UserRole)
+        if agent_id and agent_id in self.selected_agents:
+            self.detail.setHtml(f"<b>{name}</b> is selected.<br><br>More info…")
         elif item.childCount() == 0 and "(no agents)" not in name:
             self.detail.setHtml(f"ℹ️ <b>{name}</b> (not selected).<br>Click 'Select' to pick it.")
         else:
@@ -270,7 +259,5 @@ class HomeWidget(QWidget):
         self.plotter.setVisible(False)
         self.detail.setVisible(True)
         self.select_vessel_btn.setText("Select Vesseltree")
-
-
 
 

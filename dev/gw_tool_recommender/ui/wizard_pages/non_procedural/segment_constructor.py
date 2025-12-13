@@ -316,23 +316,23 @@ class SegmentConstructorPage(QWizardPage):
 
     def save_tool(self):
         import os, json
-        from pathlib import Path
         from eve.intervention.device.device import Arc, StraightPart, MeshDevice
+        from dev.gw_tool_recommender.storage import ensure_model, wire_agents_dir, wire_dir
 
         wiz = self.wizard()
+        model_name = getattr(wiz, "model_name", None) or "DefaultModel"
         tool_name = wiz.field('nonName') or "MyTool"
 
         # 1) Create project folder
-        here = Path(__file__).resolve()
-        repo_root = next((p for p in (here.parent, *here.parents) if (p / ".git").exists()), here.parents[-1])
-        base_dir = str(repo_root / "data" / tool_name)
+        ensure_model(model_name)
+        base_dir = str(wire_dir(model_name, tool_name))
         os.makedirs(base_dir, exist_ok=True)
-        os.makedirs(os.path.join(base_dir, 'agents'), exist_ok=True)
+        os.makedirs(str(wire_agents_dir(model_name, tool_name)), exist_ok=True)
 
         # 2) Write tool_definition.json
         with open(os.path.join(base_dir, 'tool_definition.json'), 'w') as f:
             json.dump(
-                {'name': tool_name, 'description': wiz.field('nonDesc') or "", 'type': "non procedural"},
+                {'name': tool_name, 'description': wiz.field('nonDesc') or "", 'type': "non procedural", 'model': model_name},
                 f, indent=2
             )
 

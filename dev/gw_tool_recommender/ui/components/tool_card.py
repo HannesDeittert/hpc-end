@@ -7,9 +7,9 @@ from PyQt5.QtWidgets import (
 )
 
 class ToolCard(QFrame):
-    clicked = pyqtSignal(str)   # will emit the tool’s directory name
+    clicked = pyqtSignal(str)   # will emit the item’s directory name
 
-    def __init__(self, tool_dir: str, definition: dict, agent_count: int):
+    def __init__(self, tool_dir: str, definition: dict, agent_count: int, count_label: str = "agent"):
         super().__init__()
         self.tool_dir = tool_dir
 
@@ -58,8 +58,9 @@ class ToolCard(QFrame):
             left_vbox.addWidget(desc_lbl)
         left_vbox.addStretch()
 
-        # right side: agent count
-        count_lbl = QLabel(f"{agent_count} agent{'s' if agent_count != 1 else ''}")
+        # right side: count
+        suffix = "s" if agent_count != 1 else ""
+        count_lbl = QLabel(f"{agent_count} {count_label}{suffix}")
         count_lbl.setObjectName("countLabel")
         count_lbl.setAlignment(Qt.AlignRight | Qt.AlignTop)
 
@@ -72,4 +73,3 @@ class ToolCard(QFrame):
         # emit the tool directory name so you can look it up again later
         self.clicked.emit(self.tool_dir)
         super().mousePressEvent(event)
-
