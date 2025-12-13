@@ -1,7 +1,7 @@
 import os, json, importlib.util, traceback
+from pathlib import Path
 import pyvista as pv
 from pyvistaqt import QtInteractor
-from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
     QTreeWidget,
@@ -18,6 +18,14 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from dev.gw_tool_recommender.ui.components.vessel_select_dialog import VesselSelectionDialog
+
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in (here.parent, *here.parents):
+        if (parent / ".git").exists():
+            return parent
+    return here.parents[-1]
 
 
 class HomeWidget(QWidget):
@@ -74,7 +82,7 @@ class HomeWidget(QWidget):
     # Populate tree from <project>/data
     # ===================================================================
     def _populate_tree(self):
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+        base_dir = str(_repo_root() / "data")
         self.tree.clear()
         if not os.path.isdir(base_dir):
             return
@@ -262,8 +270,6 @@ class HomeWidget(QWidget):
         self.plotter.setVisible(False)
         self.detail.setVisible(True)
         self.select_vessel_btn.setText("Select Vesseltree")
-
-
 
 
 

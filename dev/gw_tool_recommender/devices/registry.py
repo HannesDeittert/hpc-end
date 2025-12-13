@@ -9,7 +9,16 @@ from typing import Any, Dict, List, Optional, Type
 
 
 HERE = Path(__file__).resolve()
-PROJECT_ROOT = HERE.parents[2]
+
+
+def _repo_root() -> Path:
+    for parent in (HERE.parent, *HERE.parents):
+        if (parent / ".git").exists():
+            return parent
+    return HERE.parents[-1]
+
+
+PROJECT_ROOT = _repo_root()
 
 # Canonical location for stored tools/devices.
 # The UI writes to <repo>/data/<tool_name>/tool.py.

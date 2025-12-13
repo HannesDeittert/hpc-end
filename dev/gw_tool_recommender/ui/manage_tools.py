@@ -1,4 +1,5 @@
 import os, json
+from pathlib import Path
 
 from PyQt5.QtCore import QFileSystemWatcher
 from PyQt5.QtWidgets import QWidget, QListWidget, QPushButton, QVBoxLayout, QWizard, QListWidgetItem, QHBoxLayout, \
@@ -8,14 +9,21 @@ from .components.tool_card import ToolCard
 from .components.tool_detail import ToolDetailDialog
 from .wizard import ToolWizard
 
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in (here.parent, *here.parents):
+        if (parent / ".git").exists():
+            return parent
+    return here.parents[-1]
+
+
 class ManageToolsWidget(QWidget):
     def __init__(self):
         super().__init__()
 
         # where our on‑disk tools live
-        self.data_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "data")
-        )
+        self.data_dir = str(_repo_root() / "data")
 
         # —— List Widget ——
         self.list = QListWidget()

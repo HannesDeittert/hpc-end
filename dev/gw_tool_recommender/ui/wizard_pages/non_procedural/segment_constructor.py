@@ -316,13 +316,16 @@ class SegmentConstructorPage(QWizardPage):
 
     def save_tool(self):
         import os, json
+        from pathlib import Path
         from eve.intervention.device.device import Arc, StraightPart, MeshDevice
 
         wiz = self.wizard()
         tool_name = wiz.field('nonName') or "MyTool"
 
         # 1) Create project folder
-        base_dir = os.path.join(os.getcwd(), 'data', tool_name)
+        here = Path(__file__).resolve()
+        repo_root = next((p for p in (here.parent, *here.parents) if (p / ".git").exists()), here.parents[-1])
+        base_dir = str(repo_root / "data" / tool_name)
         os.makedirs(base_dir, exist_ok=True)
         os.makedirs(os.path.join(base_dir, 'agents'), exist_ok=True)
 

@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+from pathlib import Path
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog,
@@ -14,15 +15,22 @@ from PyQt5.QtWidgets import (
     QSizePolicy
 )
 
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in (here.parent, *here.parents):
+        if (parent / ".git").exists():
+            return parent
+    return here.parents[-1]
+
+
 class ToolDetailDialog(QDialog):
     def __init__(self, tool_dir: str, parent=None):
         super().__init__(parent)
         self.tool_dir = tool_dir
 
         # Determine base data path and tool-specific paths
-        self.data_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "data")
-        )
+        self.data_root = str(_repo_root() / "data")
         tool_path = os.path.join(self.data_root, tool_dir)
         def_path = os.path.join(tool_path, "tool_definition.json")
 

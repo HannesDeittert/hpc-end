@@ -1,7 +1,7 @@
 """Minimal first RL training entrypoint using stEVE_rl (SAC).
 
 This script lives in your code (not third_party). It:
-1) loads a stored device from dev/gw_tool_recommender/data/<name>/tool.py
+1) loads a stored device from data/<name>/tool.py
 2) builds a simple wire-navigation environment
 3) trains a SAC agent via eve_rl
 
@@ -19,7 +19,16 @@ from typing import List
 
 
 HERE = Path(__file__).resolve()
-REPO_ROOT = HERE.parents[2]
+
+
+def _repo_root() -> Path:
+    for parent in (HERE.parent, *HERE.parents):
+        if (parent / ".git").exists():
+            return parent
+    return HERE.parents[-1]
+
+
+REPO_ROOT = _repo_root()
 
 # Ensure third_party packages are importable without installation.
 sys.path.insert(0, str(REPO_ROOT / "third_party" / "stEVE_training" / "eve"))
@@ -191,4 +200,3 @@ def main():
 if __name__ == "__main__":
     os.environ.setdefault("PYTHONHASHSEED", "0")
     main()
-

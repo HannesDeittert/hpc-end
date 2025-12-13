@@ -1,7 +1,7 @@
 """Paper-style SAC training (stEVE_rl) from your own codebase.
 
 This mirrors third_party/stEVE_training/training_scripts/BasicWireNav_train.py
-but loads a device from dev/gw_tool_recommender/data/<tool_name>/tool.py.
+but loads a device from data/<tool_name>/tool.py.
 
 Example:
   python3 dev/gw_tool_recommender/rl/train_paper_arch.py \
@@ -23,7 +23,16 @@ import torch.multiprocessing as mp
 
 
 HERE = Path(__file__).resolve()
-REPO_ROOT = HERE.parents[2]
+
+
+def _repo_root() -> Path:
+    for parent in (HERE.parent, *HERE.parents):
+        if (parent / ".git").exists():
+            return parent
+    return HERE.parents[-1]
+
+
+REPO_ROOT = _repo_root()
 
 # Make third_party packages importable without installation.
 sys.path.insert(0, str(REPO_ROOT / "third_party" / "stEVE_training" / "eve"))
@@ -240,4 +249,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

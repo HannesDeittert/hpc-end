@@ -2,7 +2,7 @@
 
 This mirrors third_party/stEVE_training/training_scripts but uses the
 single-agent variant, and loads a local device from
-dev/gw_tool_recommender/data/<tool_name>/tool.py.
+data/<tool_name>/tool.py.
 
 Example:
   python3 dev/gw_tool_recommender/rl/train_paper_arch_single.py \
@@ -23,7 +23,16 @@ import torch
 
 
 HERE = Path(__file__).resolve()
-REPO_ROOT = HERE.parents[2]
+
+
+def _repo_root() -> Path:
+    for parent in (HERE.parent, *HERE.parents):
+        if (parent / ".git").exists():
+            return parent
+    return HERE.parents[-1]
+
+
+REPO_ROOT = _repo_root()
 
 # Make third_party packages importable without installation.
 sys.path.insert(0, str(REPO_ROOT / "third_party" / "stEVE_training" / "eve"))
@@ -237,4 +246,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -1,6 +1,16 @@
 import os, json
+from pathlib import Path
 from PyQt5.QtWidgets import QWizardPage, QLabel, QVBoxLayout, QWizard
 from PyQt5.QtCore import pyqtSignal
+
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in (here.parent, *here.parents):
+        if (parent / ".git").exists():
+            return parent
+    return here.parents[-1]
+
 
 class ReviewPage(QWizardPage):
     """
@@ -45,8 +55,6 @@ class ReviewPage(QWizardPage):
         return True
 
     def _save_procedural_tool(self):
-        import os, json
-
         wiz = self.wizard()
 
         # --- General params (from ProceduralGeneralParamsPage) ---
@@ -85,7 +93,7 @@ class ReviewPage(QWizardPage):
         rot_spd = sim_pg.rot_speed_spin.value()
 
         # --- prepare output dirs ---
-        base = os.path.join(os.getcwd(), 'data', tool_name)
+        base = str(_repo_root() / "data" / tool_name)
         os.makedirs(base, exist_ok=True)
         os.makedirs(os.path.join(base, 'agents'), exist_ok=True)
 
