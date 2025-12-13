@@ -4,19 +4,19 @@ from typing import Tuple
 from eve.intervention.device.device import MeshDevice, StraightPart, Arc
 
 @dataclass
-class qwdqqwd(MeshDevice):
-    name: str = 'qwdqqwd'
+class Test(MeshDevice):
+    name: str = 'Test'
     velocity_limit: Tuple[float, float] = (100.0, 30.0)
-    outer_diameter: float = 10.0
+    outer_diameter: float = 1.0
     inner_diameter: float = 0.0
     poisson_ratio: float = 0.3
     young_modulus: float = 210.0
     mass_density: float = 7850.0
     visu_edges_per_mm: float = 0.5
-    color: Tuple[int, int, int] = (0, 0, 0)
+    color: Tuple[int, int, int] = (85, 170, 127)
 
     elements = [
-        StraightPart(length=1.0, visu_edges_per_mm=0.5, collis_edges_per_mm=1.0, beams_per_mm=1.0)
+        StraightPart(length=10.0, visu_edges_per_mm=0.5, collis_edges_per_mm=4.0, beams_per_mm=3.0)
     ]
 
     @property

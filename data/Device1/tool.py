@@ -4,8 +4,8 @@ from typing import Tuple, Union, List
 from eve.intervention.device.device import Device
 
 @dataclass
-class weffe(Device):
-    name: str = 'weffe'
+class Device1(Device):
+    name: str = 'Device1'
     length: float = 100.0
     straight_length: float = 5.0
     spire_diameter: float = 10.0
@@ -23,7 +23,7 @@ class weffe(Device):
     num_edges_collis: Union[float, Tuple[float,...]] = 0.1
     density_of_beams: Union[float, Tuple[float,...]] = 0.09
     key_points: Tuple[float, ...] = (0.0, 0.0, 100.0)
-    color: Tuple[int,int,int] = (0, 0, 0)
+    color: Tuple[int,int,int] = (255, 170, 0)
     velocity_limit: Tuple[float,float] = (50.0, 3.14)
     is_a_procedural_shape: bool = field(init=False, default=True, repr=False)
     mesh_path: str = field(init=False, default=None, repr=False)
