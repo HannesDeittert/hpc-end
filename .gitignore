@@ -16,6 +16,7 @@ build/
 results/
 logs/
 *.log
+data/
 
 # --- SOFA artefacts (falls lokal kompiliert) ---
 bin/

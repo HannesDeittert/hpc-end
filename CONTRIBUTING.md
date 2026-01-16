@@ -103,8 +103,8 @@ git checkout main && git pull && git merge --ff-only dev && git push
 ## 6  Directory Overview
 
 ```
-third_party/        # git submodules (read‑only; update via submodule workflow)
-dev/                # project‑specific source code (importable as 'gwtool')
+steve_recommender/  # project package code
+examples/           # runnable examples
 docs/               # Sphinx or markdown docs, images
 experiments/        # one‑off notebooks, scratch scripts
 ```

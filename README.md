@@ -1,4 +1,4 @@
-# gw-tool-recommender
+# steve-recommender
 
 > **Purpose**\
 > Reinforcement‑learning–based framework to **recommend the optimal guidewire** for a given vessel geometry.\
@@ -19,53 +19,39 @@
 
 ```
 master-project/
-├── third_party/                # ⤵ five git submodules (exact upstream commits)
-│   ├── stEVE/
-│   ├── stEVE_bench/
-│   ├── stEVE_rl/
-│   ├── stEVE_training/
-│   └── aortic_arch_generator/
-├── dev/                        # source code (tool‑compare logic, XAI, etc.)
-│   ├── tool_compare/
+├── steve_recommender/          # package code
+├── examples/                   # runnable examples
 ├── experiments/                # notebooks, adhoc scripts
 ├── docs/                       # images, thesis diagrams, reports
 ├── data/                       # user-created models & wires (UI output)
+├── results/                    # generated runs (gitignored)
 ├── .gitignore
-├── .gitmodules                 # records the submodule URLs & paths
 ├── CONTRIBUTING.md             # guideline for contributing and working with the project
-└── README.md                   
+└── README.md
 ```
 
 ---
 
 ## Getting started
 
-1. **Fowllow the instructions to install SOFA with SofaPython3 and BeamAdapter**
-2. **Clone incl. submodules**
+1. **Follow the instructions to install SOFA with SofaPython3 and BeamAdapter**
+2. **Clone the repo**
 ```bash
-# clone incl. submodules
-$ git clone --recursive https://github.com/HannesDeittert/gw-tool-recommender.git
-$ cd gw-tool-recommender
+$ git clone https://github.com/HannesDeittert/steve-recommender.git
+$ cd steve-recommender
 ```
 3. **Create & activate conda env (Python 3.8)**
 ```bash
 $ mamba create -n env_name python=3.8 -y
 $ conda activate env_name
 ```
-4. **Create & activate conda env (Python 3.8)**
+4. **Install the package (pulls stEVE dependencies via git pins)**
 ```bash
-# editable‑install of all stEVE packages
-$ pip install -e third_party/stEVE
-$ pip install -e third_party/stEVE_bench
-$ pip install -e third_party/stEVE_rl
-$ pip install -e third_party/aortic_arch_generator
-$ pip install -e third_party/stEVE_training/eve
-$ pip install -e third_party/stEVE_training/eve_bench
-$ pip install -e third_party/stEVE_training/eve_rl
+$ pip install -e .
 ```
-4. **Run smoke test**
+5. **Run smoke test**
 ```bash
-$ python third_party/stEVE/examples/function_check.py
+$ python -m steve_recommender.rl.smoke_train --tool <model>/<wire> --device cpu
 ```
 
 ---
@@ -77,6 +63,24 @@ The UI stores your created assets under `data/`:
 - `data/<model>/wires/<wire>/tool.py`
 - `data/<model>/wires/<wire>/tool_definition.json`
 - `data/<model>/wires/<wire>/agents/` (optional training artifacts)
+
+---
+## Training (paper architecture)
+
+This repo provides its own training entrypoints (outside upstream stEVE repos) that mirror the stEVE_training scripts but load your stored wires from `data/`.
+
+- Docs: `docs/training_pipeline.md`
+- Entrypoints: `steve-train` (multi-worker) and `python -m steve_recommender.rl.train_paper_arch_single` (single agent / debug)
+- Helper scripts: `scripts/sofa_env.sh`, `scripts/train_paper.sh`, `scripts/monitor_paper.sh`
+
+---
+## Evaluation (benchmark pipeline)
+
+Repo-local evaluation pipeline to benchmark **multiple trained agents** (each with its own tool + checkpoint) on a fixed anatomy.
+
+- Docs: `docs/evaluation_pipeline.md`
+- CLI: `steve-eval --config docs/eval_example.yml`
+- Outputs: `results/eval_runs/<timestamp>_<name>/summary.csv` + `trials/*.npz`
 
 ---
 ## Install SOFA with SofaPython3 & BeamAdapter

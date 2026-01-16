@@ -1,0 +1,53 @@
+# Example evaluation config.
+# Run with:
+#   steve-eval --config docs/eval_example.yml
+
+name: eval_standardj_demo
+
+# One or more agents (checkpoint + the tool they control).
+agents:
+  - name: paper_standardj_latest
+    tool: TestModel_StandardJ035/StandardJ035_PTFE
+    # Set this to a real checkpoint file (usually under results/paper_runs/.../checkpoints/).
+    checkpoint: results/paper_runs/<run_folder>/checkpoints/checkpointXXXX.everl
+
+# Trials per agent (same seeds for all agents for fair comparison).
+n_trials: 3
+base_seed: 123
+
+# Truncation limit.
+max_episode_steps: 1000
+
+# Policy inference device. Use "cpu" if training is already using your GPU.
+policy_device: cuda
+
+# Must be true if you want SOFA force scalars (wall_lcp_*, wall_*_force_norm).
+use_non_mp_sim: true
+
+# Scoring config (optional). The defaults work for relative comparisons.
+scoring:
+  mode: default_v1
+  w_success: 2.0
+  w_efficiency: 1.0
+  w_safety: 1.0
+  w_smoothness: 0.25
+  normalize_weights: true
+  force_scale: 1.0
+  lcp_scale: 1.0
+  speed_scale_mm_s: 50.0
+
+# Output folder root (relative to repo root).
+output_root: results/eval_runs
+
+anatomy:
+  type: aortic_arch
+  arch_type: I
+  seed: 30
+  target_mode: branch_end
+  target_branches: ["lcca"]
+  target_threshold_mm: 5.0
+
+  # Fluoro/sim parameters (kept explicit so runs are reproducible).
+  image_frequency_hz: 7.5
+  image_rot_zx_deg: [20.0, 5.0]
+  friction: 0.001
