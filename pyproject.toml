@@ -9,7 +9,7 @@ description = "Guidewire tool recommender built on stEVE."
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    "eve @ git+https://github.com/lkarstensen/stEVE.git@041e607ea1f866ee47d7950376f1da2d10fc2397",
+    "eve @ git+https://github.com/lkarstensen/stEVE.git@f909e7122d846a3c2fec91eedddaa0ba88b6391d",
     "eve_rl @ git+https://github.com/lkarstensen/stEVE_rl.git@64222b7b74d113a6e965b58d5739b475f2c87a02",
     "numpy",
     "PyYAML",
