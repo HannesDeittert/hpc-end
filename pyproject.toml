@@ -21,6 +21,7 @@ dependencies = [
 steve-eval = "steve_recommender.evaluation.run_cli:main"
 steve-train = "steve_recommender.rl.train_paper_arch:main"
 steve-ui = "steve_recommender.ui_nicegui.app:main"
+steve-uictl = "steve_recommender.ui_nicegui.cli:main"
 
 [project.optional-dependencies]
 ui = [

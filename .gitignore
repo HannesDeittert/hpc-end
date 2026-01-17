@@ -1,18 +1,26 @@
 # --- Python ---
 __pycache__/
 *.py[cod]
+*.pyd
 
 # --- Environments / Packages ---
 workspace/
 .venv/
 env/
 *.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+*.whl
 
 # --- IDE / Editor ---
 .idea/
+.vscode/
+*.swp
+*.swo
 
 # --- Build & Logs ---
-build/
 results/
 logs/
 *.log
@@ -31,3 +39,26 @@ notebooks/.ipynb_checkpoints/
 wandb/
 tensorboard/
 checkpoints/
+runs/
+lightning_logs/
+
+# --- Tests / Coverage ---
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# --- Type / Lint ---
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# --- Env / OS ---
+.env
+.env.*
+.python-version
+.direnv/
+.DS_Store

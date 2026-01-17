@@ -92,6 +92,14 @@ $ pip install -e .[ui]
 $ steve-ui
 ```
 
+Background management (creates a pid/log under `~/.local/state/steve-recommender/`):
+
+```bash
+$ steve-uictl start
+$ steve-uictl status
+$ steve-uictl stop
+```
+
 ---
 ## Install SOFA with SofaPython3 & BeamAdapter
 
