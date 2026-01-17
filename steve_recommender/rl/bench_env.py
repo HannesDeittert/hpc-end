@@ -1,4 +1,4 @@
-from steve_recommender.steve_adapter import eve
+from steve_recommender.adapters import eve
 
 from steve_recommender.visualisation.interactive_sofapygame import (
     InteractiveSofaPygame,

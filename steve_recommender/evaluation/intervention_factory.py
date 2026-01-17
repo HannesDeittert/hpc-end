@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from steve_recommender.devices import make_device
-from steve_recommender.steve_adapter import eve
+from steve_recommender.adapters import eve
 
 
 def build_aortic_arch_intervention(*, tool_ref: str, anatomy) -> Tuple[object, float]:

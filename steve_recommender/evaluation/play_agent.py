@@ -121,7 +121,7 @@ def main() -> None:
 
     from steve_recommender.evaluation.intervention_factory import build_aortic_arch_intervention
     from steve_recommender.rl.bench_env import BenchEnv
-    from steve_recommender.steve_adapter import eve, eve_rl
+    from steve_recommender.adapters import eve, eve_rl
 
     anatomy_spec = _load_anatomy_spec(args)
 

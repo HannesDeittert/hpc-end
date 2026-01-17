@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import torch
 
-from steve_recommender.steve_adapter import eve_rl
+from steve_recommender.adapters import eve_rl
 
 @dataclass(frozen=True)
 class PaperAgentConfig:

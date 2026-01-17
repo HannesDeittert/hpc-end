@@ -14,7 +14,7 @@ import torch
 from .config import EvaluationConfig
 from .info_collectors import SofaWallForceInfo, TipStateInfo
 from .intervention_factory import build_aortic_arch_intervention
-from steve_recommender.steve_adapter import eve, eve_rl
+from steve_recommender.adapters import eve, eve_rl
 from .scoring import TrialScore, aggregate_scores, score_trial
 
 

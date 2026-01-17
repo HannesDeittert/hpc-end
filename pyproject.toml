@@ -20,6 +20,12 @@ dependencies = [
 [project.scripts]
 steve-eval = "steve_recommender.evaluation.run_cli:main"
 steve-train = "steve_recommender.rl.train_paper_arch:main"
+steve-ui = "steve_recommender.ui_nicegui.app:main"
+
+[project.optional-dependencies]
+ui = [
+    "nicegui>=1.4.37,<2",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

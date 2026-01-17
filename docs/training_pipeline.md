@@ -55,10 +55,16 @@ Outputs:
 - `results/paper_runs/<timestamp>_<name>/main.log` (structured logger)
 - `results/paper_runs/<timestamp>_<name>/checkpoints/*.everl`
 - `results/paper_runs/<timestamp>_<name>.csv`
+- `data/<model>/wires/<wire>/agents/<name>/agent.json` (agent registry entry)
 
 Monitor:
 ```bash
 bash scripts/monitor_paper.sh --name paper_standardj
+```
+
+Disable agent registration:
+```bash
+bash scripts/train_paper.sh --no-register-agent ...
 ```
 
 Stop (graceful):

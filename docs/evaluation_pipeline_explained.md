@@ -54,7 +54,7 @@ Anatomy details (aortic arch):
 
 ### 1) Setup + outputs
 
-- stEVE packages are imported via the `steve_recommender.steve_adapter` module.
+- stEVE packages are imported via the `steve_recommender.adapters` module.
 - Creates `results/eval_runs/<timestamp>_<name>/`.
 - Writes `config.json` and initializes `summary.csv`.
 

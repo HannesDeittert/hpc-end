@@ -191,7 +191,7 @@ def generate_aortic_arch_records(
     _ensure_dir(dataset.root)
     _ensure_dir(dataset.records_dir)
 
-    from steve_recommender.steve_adapter import eve
+    from steve_recommender.adapters import eve
 
     # Normalize/validate arch types once.
     allowed = {t.value for t in eve.intervention.vesseltree.ArchType}

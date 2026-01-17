@@ -113,7 +113,7 @@ class ReviewPage(QWizardPage):
             f.write(f"""
 from dataclasses import dataclass, field
 from typing import Tuple, Union, List
-from steve_recommender.steve_adapter import eve
+from steve_recommender.adapters import eve
 
 Device = eve.intervention.device.device.Device
 

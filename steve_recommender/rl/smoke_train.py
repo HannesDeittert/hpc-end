@@ -32,7 +32,7 @@ from steve_recommender.rl.results_paths import (
     get_result_checkpoint_config_and_log_path,
 )
 from steve_recommender.rl.runner import Runner
-from steve_recommender.steve_adapter import eve
+from steve_recommender.adapters import eve
 from steve_recommender.storage import repo_root
 
 

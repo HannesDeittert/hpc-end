@@ -1,4 +1,4 @@
-# Contributing Guidelines for **gw‑tool‑recommender**
+# Contributing Guidelines for **steve-recommender**
 
 > A concise, professional guide that lets future contributors (including my future‑self) ramp up in minutes and keeps the history clean and reproducible.
 
@@ -103,7 +103,7 @@ git checkout main && git pull && git merge --ff-only dev && git push
 ## 6  Directory Overview
 
 ```
-steve_recommender/  # project package code
+steve_recommender/  # project package code (adapters/, domain/, services/, ui_nicegui/)
 examples/           # runnable examples
 docs/               # Sphinx or markdown docs, images
 experiments/        # one‑off notebooks, scratch scripts

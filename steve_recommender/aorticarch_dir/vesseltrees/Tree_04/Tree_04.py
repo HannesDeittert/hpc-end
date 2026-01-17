@@ -1,5 +1,5 @@
 
-from steve_recommender.steve_adapter import eve
+from steve_recommender.adapters import eve
 
 VesselTree = eve.intervention.vesseltree.VesselTree
 AorticArch = eve.intervention.vesseltree.aorticarch.AorticArch

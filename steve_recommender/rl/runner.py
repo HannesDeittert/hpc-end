@@ -6,7 +6,7 @@ import os
 from math import inf
 from typing import Any, List, Optional, Tuple
 
-from steve_recommender.steve_adapter import eve_rl
+from steve_recommender.adapters import eve_rl
 
 Agent = eve_rl.agent.agent.Agent
 EpisodeCounter = eve_rl.agent.agent.EpisodeCounter

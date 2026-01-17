@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List
 
 from steve_recommender.devices import make_device
-from steve_recommender.steve_adapter import eve, eve_rl
+from steve_recommender.adapters import eve, eve_rl
 from steve_recommender.storage import repo_root
 
 

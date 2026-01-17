@@ -20,6 +20,7 @@ import torch
 import torch.multiprocessing as mp
 
 from steve_recommender.devices import make_device
+from steve_recommender.domain import TrainingConfig
 from steve_recommender.rl.bench_env import BenchEnv
 from steve_recommender.rl.paper_agent_factory import (
     PaperAgentConfig,
@@ -29,8 +30,9 @@ from steve_recommender.rl.results_paths import (
     get_result_checkpoint_config_and_log_path,
 )
 from steve_recommender.rl.runner import Runner
-from steve_recommender.steve_adapter import eve
-from steve_recommender.storage import repo_root
+from steve_recommender.adapters import eve
+from steve_recommender.services.agent_service import register_agent
+from steve_recommender.storage import parse_wire_ref, repo_root
 
 
 REPO_ROOT = repo_root()
@@ -153,6 +155,25 @@ def parse_args() -> argparse.Namespace:
         help="Path to a .everl checkpoint to resume training from.",
     )
     parser.add_argument(
+        "--register-agent",
+        dest="register_agent",
+        action="store_true",
+        default=True,
+        help="Register latest checkpoint under data/<model>/wires/<wire>/agents.",
+    )
+    parser.add_argument(
+        "--no-register-agent",
+        dest="register_agent",
+        action="store_false",
+        help="Disable agent registration.",
+    )
+    parser.add_argument(
+        "--agent-name",
+        type=str,
+        default=None,
+        help="Name for the agent registry entry (defaults to --name).",
+    )
+    parser.add_argument(
         "--stdout",
         action="store_true",
         help="Also log to stdout (console).",
@@ -262,74 +283,116 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def _latest_checkpoint(checkpoint_folder: Path) -> Optional[Path]:
+    checkpoints = sorted(checkpoint_folder.glob("*.everl"), key=lambda p: p.stat().st_mtime)
+    return checkpoints[-1] if checkpoints else None
+
+
+def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
+    return TrainingConfig(
+        tool=args.tool,
+        model=args.model,
+        name=args.name,
+        n_worker=args.n_worker,
+        trainer_device=args.device,
+        replay_device=args.replay_device,
+        out_root=Path(args.out),
+        learning_rate=args.learning_rate,
+        hidden_layers=args.hidden,
+        embedder_nodes=args.embedder_nodes,
+        embedder_layers=args.embedder_layers,
+        heatup_steps=args.heatup_steps,
+        training_steps=args.training_steps,
+        eval_every=args.eval_every,
+        eval_episodes=args.eval_episodes,
+        explore_episodes_between_updates=args.explore_episodes_between_updates,
+        update_per_explore_step=args.update_per_explore_step,
+        consecutive_action_steps=args.consecutive_action_steps,
+        batch_size=args.batch_size,
+        replay_buffer_size=args.replay_buffer_size,
+        log_interval_s=args.log_interval_s,
+        omp_threads=args.omp_threads,
+        torch_threads=args.torch_threads,
+        torch_interop_threads=args.torch_interop_threads,
+        stochastic_eval=args.stochastic_eval,
+        tensorboard=args.tensorboard,
+        tb_logdir=Path(args.tb_logdir) if args.tb_logdir else None,
+        resume_from=Path(args.resume_from) if args.resume_from else None,
+        register_agent=args.register_agent,
+        agent_name=args.agent_name,
+        stdout=args.stdout,
+    )
+
+
+def run_training(cfg: TrainingConfig) -> Path:
+    """Run a paper-style training job and return the run directory."""
+
     mp.set_start_method("spawn", force=True)
-    args = parse_args()
 
     # Threading: with multiple worker processes, keep BLAS/OMP and torch CPU threads low
     # to avoid oversubscription.
-    os.environ["OMP_NUM_THREADS"] = str(args.omp_threads)
-    os.environ["MKL_NUM_THREADS"] = str(args.omp_threads)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(args.omp_threads)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(args.omp_threads)
+    os.environ["OMP_NUM_THREADS"] = str(cfg.omp_threads)
+    os.environ["MKL_NUM_THREADS"] = str(cfg.omp_threads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(cfg.omp_threads)
+    os.environ["NUMEXPR_NUM_THREADS"] = str(cfg.omp_threads)
 
-    torch.set_num_threads(args.torch_threads)
-    torch.set_num_interop_threads(args.torch_interop_threads)
-    if str(args.device).startswith("cuda"):
+    torch.set_num_threads(cfg.torch_threads)
+    torch.set_num_interop_threads(cfg.torch_interop_threads)
+    if str(cfg.trainer_device).startswith("cuda"):
         # Allow TF32 matmuls on Ampere+ for speed (Ada supports it too).
         torch.set_float32_matmul_precision("high")
 
-    tool_ref = args.tool
-    if args.model and "/" not in tool_ref:
-        tool_ref = f"{args.model}/{tool_ref}"
+    tool_ref = cfg.tool
+    if cfg.model and "/" not in tool_ref:
+        tool_ref = f"{cfg.model}/{tool_ref}"
 
     resume_path: Optional[Path] = None
-    if args.resume_from:
-        resume_path = Path(args.resume_from).expanduser().resolve()
+    if cfg.resume_from:
+        resume_path = cfg.resume_from.expanduser().resolve()
         if not resume_path.is_file():
-            raise FileNotFoundError(f"--resume-from not found: {resume_path}")
+            raise FileNotFoundError(f"resume_from not found: {resume_path}")
 
-    trainer_device = torch.device(args.device)
-    worker_device = torch.device("cpu")
-    print(f"[train] tool={tool_ref} trainer_device={trainer_device} workers={args.n_worker}")
+    trainer_device = torch.device(cfg.trainer_device)
+    worker_device = torch.device(cfg.worker_device)
+    print(f"[train] tool={tool_ref} trainer_device={trainer_device} workers={cfg.n_worker}")
     print(
         "[train] "
-        f"heatup_steps={int(args.heatup_steps)} training_steps={int(args.training_steps)} "
-        f"eval_every={int(args.eval_every)} eval_episodes={args.eval_episodes} "
-        f"batch_size={args.batch_size} replay_buffer_size={int(args.replay_buffer_size)} "
-        f"explore_episodes_between_updates={args.explore_episodes_between_updates} "
-        f"update_per_explore_step={args.update_per_explore_step} "
-        f"consecutive_action_steps={args.consecutive_action_steps} "
-        f"replay_device={args.replay_device} "
-        f"omp_threads={args.omp_threads} torch_threads={args.torch_threads}/{args.torch_interop_threads}"
+        f"heatup_steps={int(cfg.heatup_steps)} training_steps={int(cfg.training_steps)} "
+        f"eval_every={int(cfg.eval_every)} eval_episodes={cfg.eval_episodes} "
+        f"batch_size={cfg.batch_size} replay_buffer_size={int(cfg.replay_buffer_size)} "
+        f"explore_episodes_between_updates={cfg.explore_episodes_between_updates} "
+        f"update_per_explore_step={cfg.update_per_explore_step} "
+        f"consecutive_action_steps={cfg.consecutive_action_steps} "
+        f"replay_device={cfg.replay_device} "
+        f"omp_threads={cfg.omp_threads} torch_threads={cfg.torch_threads}/{cfg.torch_interop_threads}"
     )
 
-    replay_device = torch.device(args.replay_device)
+    replay_device = torch.device(cfg.replay_device)
     if replay_device.type == "cuda":
         # Keep replay sampling on CPU unless you know what you're doing.
         print("[train] warning: replay buffer on CUDA can cause CUDA IPC warnings.")
 
     custom_parameters = {
-        "lr": args.learning_rate,
-        "hidden_layers": args.hidden,
-        "embedder_nodes": args.embedder_nodes,
-        "embedder_layers": args.embedder_layers,
-        "HEATUP_STEPS": args.heatup_steps,
-        "TRAINING_STEPS": args.training_steps,
-        "EXPLORE_STEPS_BTW_EVAL": args.eval_every,
-        "EVAL_EPISODES": args.eval_episodes,
-        "CONSECUTIVE_EXPLORE_EPISODES": args.explore_episodes_between_updates,
-        "UPDATE_PER_EXPLORE_STEP": args.update_per_explore_step,
-        "CONSECUTIVE_ACTION_STEPS": args.consecutive_action_steps,
-        "BATCH_SIZE": args.batch_size,
-        "REPLAY_BUFFER_SIZE": args.replay_buffer_size,
-        "REPLAY_DEVICE": args.replay_device,
+        "lr": cfg.learning_rate,
+        "hidden_layers": cfg.hidden_layers,
+        "embedder_nodes": cfg.embedder_nodes,
+        "embedder_layers": cfg.embedder_layers,
+        "HEATUP_STEPS": cfg.heatup_steps,
+        "TRAINING_STEPS": cfg.training_steps,
+        "EXPLORE_STEPS_BTW_EVAL": cfg.eval_every,
+        "EVAL_EPISODES": cfg.eval_episodes,
+        "CONSECUTIVE_EXPLORE_EPISODES": cfg.explore_episodes_between_updates,
+        "UPDATE_PER_EXPLORE_STEP": cfg.update_per_explore_step,
+        "CONSECUTIVE_ACTION_STEPS": cfg.consecutive_action_steps,
+        "BATCH_SIZE": cfg.batch_size,
+        "REPLAY_BUFFER_SIZE": cfg.replay_buffer_size,
+        "REPLAY_DEVICE": cfg.replay_device,
     }
 
-    results_root = Path(args.out)
-    results_file, checkpoint_folder, config_folder, log_file = (
+    results_root = Path(cfg.out_root)
+    results_file, checkpoint_folder, run_dir, log_file = (
         get_result_checkpoint_config_and_log_path(
-            all_results_folder=str(results_root), name=args.name
+            all_results_folder=str(results_root), name=cfg.name
         )
     )
     handlers: List[logging.Handler] = [logging.FileHandler(log_file)]
@@ -351,38 +414,38 @@ def main() -> None:
     # because a single explore chunk overshoots the (too small) eval/training step limits.
     max_steps_per_episode = 1000  # BenchEnv default
     expected_steps_per_explore_chunk = (
-        args.explore_episodes_between_updates * max_steps_per_episode
+        cfg.explore_episodes_between_updates * max_steps_per_episode
     )
-    if args.training_steps <= expected_steps_per_explore_chunk:
+    if cfg.training_steps <= expected_steps_per_explore_chunk:
         print(
             "[train] warning: training_steps is very small compared to one explore chunk "
-            f"({int(args.training_steps)} <= {expected_steps_per_explore_chunk}). "
+            f"({int(cfg.training_steps)} <= {expected_steps_per_explore_chunk}). "
             "This often finishes before any update happens. Increase --training-steps "
             "or reduce --explore-episodes-between-updates.",
             flush=True,
         )
-    if args.eval_every <= expected_steps_per_explore_chunk:
+    if cfg.eval_every <= expected_steps_per_explore_chunk:
         print(
             "[train] warning: eval_every is very small compared to one explore chunk "
-            f"({int(args.eval_every)} <= {expected_steps_per_explore_chunk}). "
+            f"({int(cfg.eval_every)} <= {expected_steps_per_explore_chunk}). "
             "This can cause evals before updates start. Increase --eval-every "
             "or reduce --explore-episodes-between-updates.",
             flush=True,
         )
 
     agent_cfg = PaperAgentConfig(
-        hidden_layers=args.hidden,
-        embedder_nodes=args.embedder_nodes,
-        embedder_layers=args.embedder_layers,
+        hidden_layers=cfg.hidden_layers,
+        embedder_nodes=cfg.embedder_nodes,
+        embedder_layers=cfg.embedder_layers,
         ff_only=False,
-        lr=args.learning_rate,
+        lr=cfg.learning_rate,
         lr_end_factor=LR_END_FACTOR,
         lr_linear_end_steps=int(LR_LINEAR_END_STEPS),
         gamma=GAMMA,
         reward_scaling=REWARD_SCALING,
-        batch_size=args.batch_size,
-        replay_buffer_size=int(args.replay_buffer_size),
-        stochastic_eval=args.stochastic_eval,
+        batch_size=cfg.batch_size,
+        replay_buffer_size=int(cfg.replay_buffer_size),
+        stochastic_eval=cfg.stochastic_eval,
     )
     agent = make_synchron_agent(
         agent_cfg,
@@ -391,11 +454,11 @@ def main() -> None:
         trainer_device=trainer_device,
         worker_device=worker_device,
         replay_device=replay_device,
-        consecutive_action_steps=args.consecutive_action_steps,
-        n_worker=args.n_worker,
+        consecutive_action_steps=cfg.consecutive_action_steps,
+        n_worker=cfg.n_worker,
     )
 
-    heatup_steps_to_run = args.heatup_steps
+    heatup_steps_to_run = cfg.heatup_steps
     if resume_path is not None:
         print(f"[train] resuming from checkpoint: {resume_path}", flush=True)
         agent.load_checkpoint(str(resume_path))
@@ -410,15 +473,15 @@ def main() -> None:
         # The checkpoint already contains heatup steps; do not heatup again.
         heatup_steps_to_run = 0
 
-    env_train_config = os.path.join(config_folder, "env_train.yml")
+    env_train_config = os.path.join(run_dir, "env_train.yml")
     env_train.save_config(env_train_config)
-    env_eval_config = os.path.join(config_folder, "env_eval.yml")
+    env_eval_config = os.path.join(run_dir, "env_eval.yml")
     env_eval.save_config(env_eval_config)
 
     infos = list(env_eval.info.info.keys())
     tb_logdir = None
-    if args.tensorboard:
-        tb_logdir = args.tb_logdir or os.path.join(config_folder, "tb")
+    if cfg.tensorboard:
+        tb_logdir = str(cfg.tb_logdir) if cfg.tb_logdir else os.path.join(run_dir, "tb")
     runner = Runner(
         agent=agent,
         heatup_action_low=[-10.0, -1.0],
@@ -430,7 +493,7 @@ def main() -> None:
         quality_info="success",
         tensorboard_logdir=tb_logdir,
     )
-    runner_config = os.path.join(config_folder, "runner.yml")
+    runner_config = os.path.join(run_dir, "runner.yml")
     runner.save_config(runner_config)
 
     # Lightweight progress heartbeat.
@@ -444,7 +507,7 @@ def main() -> None:
         last_e = 0
         last_u = 0
         last_t = time.time()
-        while not stop_evt.wait(args.log_interval_s):
+        while not stop_evt.wait(cfg.log_interval_s):
             now = time.time()
             dt = max(1e-6, now - last_t)
             h = int(agent.step_counter.heatup)
@@ -459,7 +522,7 @@ def main() -> None:
                 f"explore={e} (+{de}/ {dt:.0f}s) update={u} (+{du}/ {dt:.0f}s)"
             )
             logging.getLogger("gw.paper").info(msg)
-            if args.stdout:
+            if cfg.stdout:
                 print(f"[train] {msg}", flush=True)
             last_h, last_e, last_u, last_t = h, e, u, now
 
@@ -469,11 +532,11 @@ def main() -> None:
     try:
         runner.training_run(
             heatup_steps_to_run,
-            args.training_steps,
-            args.eval_every,
-            args.explore_episodes_between_updates,
-            args.update_per_explore_step,
-            eval_episodes=args.eval_episodes,
+            cfg.training_steps,
+            cfg.eval_every,
+            cfg.explore_episodes_between_updates,
+            cfg.update_per_explore_step,
+            eval_episodes=cfg.eval_episodes,
             eval_seeds=None,
         )
     except KeyboardInterrupt:
@@ -486,6 +549,30 @@ def main() -> None:
             agent.close()
         except Exception as e:  # noqa: BLE001
             print(f"[train] warning: failed to close cleanly: {e}", flush=True)
+
+    if cfg.register_agent:
+        model, _ = parse_wire_ref(tool_ref)
+        if not model:
+            print(
+                "[train] skip agent registration: tool ref must be 'model/wire'.",
+                flush=True,
+            )
+        else:
+            checkpoint_path = _latest_checkpoint(Path(checkpoint_folder))
+            register_agent(
+                tool_ref=tool_ref,
+                checkpoint_path=checkpoint_path,
+                agent_name=cfg.agent_name or cfg.name,
+                run_dir=Path(run_dir),
+            )
+
+    return Path(run_dir)
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = _config_from_args(args)
+    run_training(cfg)
 
 
 if __name__ == "__main__":

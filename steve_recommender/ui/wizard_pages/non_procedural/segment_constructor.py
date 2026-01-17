@@ -243,7 +243,7 @@ class SegmentConstructorPage(QWizardPage):
     def build_mesh(self):
         import pyvista as pv
 
-        from steve_recommender.steve_adapter import eve
+        from steve_recommender.adapters import eve
 
         Arc = eve.intervention.device.device.Arc
         StraightPart = eve.intervention.device.device.StraightPart
@@ -323,7 +323,7 @@ class SegmentConstructorPage(QWizardPage):
         import os, json
         from pathlib import Path
 
-        from steve_recommender.steve_adapter import eve
+        from steve_recommender.adapters import eve
         from steve_recommender.storage import ensure_model, wire_agents_dir, wire_dir
 
         Arc = eve.intervention.device.device.Arc
@@ -380,7 +380,7 @@ class SegmentConstructorPage(QWizardPage):
             f.write(f"""
 from dataclasses import dataclass
 from typing import Tuple
-from steve_recommender.steve_adapter import eve
+from steve_recommender.adapters import eve
 
 MeshDevice = eve.intervention.device.device.MeshDevice
 StraightPart = eve.intervention.device.device.StraightPart

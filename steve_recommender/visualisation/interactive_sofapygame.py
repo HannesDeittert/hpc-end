@@ -16,7 +16,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from steve_recommender.steve_adapter import eve
+from steve_recommender.adapters import eve
 
 @dataclass
 class _KeyConfig:

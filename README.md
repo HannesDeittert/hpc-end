@@ -83,6 +83,16 @@ Repo-local evaluation pipeline to benchmark **multiple trained agents** (each wi
 - Outputs: `results/eval_runs/<timestamp>_<name>/summary.csv` + `trials/*.npz`
 
 ---
+## UI (NiceGUI, optional)
+
+NiceGUI UI for browsing models/wires, launching training, and running evaluation.
+
+```bash
+$ pip install -e .[ui]
+$ steve-ui
+```
+
+---
 ## Install SOFA with SofaPython3 & BeamAdapter
 
 You have **two ways** to get SOFA (incl. SofaPython3 and BeamAdapter) up and running. *For almost everyone, downloading the official binaries is the fastest and most reliable path.*
