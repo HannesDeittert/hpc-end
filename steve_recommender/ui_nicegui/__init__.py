@@ -1,1 +1,0 @@
-"""NiceGUI-based UI entrypoints."""

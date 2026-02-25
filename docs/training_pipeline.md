@@ -34,10 +34,43 @@ Activate your env, set SOFA vars, then run a quick import check:
 conda activate master-project
 source scripts/sofa_env.sh
 
-python -c "import eve, eve_rl; print('eve', eve.__file__); print('eve_rl', eve_rl.__file__)"
+python -c "import eve, eve_rl, eve_bench, aorticarchgenerator; print('eve', eve.__file__); print('eve_rl', eve_rl.__file__); print('eve_bench', eve_bench.__file__); print('aorticarchgenerator', aorticarchgenerator.__file__)"
 ```
 
-## 4) Start training (paper architecture, multi-worker)
+## 4) Docker training (recommended for reproducibility)
+
+The most stable setup for long runs is a container with pinned dependency versions
+and a prebuilt SOFA binary install. This repo ships a Dockerfile that bundles
+the full stEVE stack plus this project.
+
+Build the image:
+
+```bash
+docker build -f docker/Dockerfile -t steve-training .
+```
+
+Run with GPU access and a mounted results folder:
+
+```bash
+docker run --gpus all --ipc=host --shm-size 15G -it \
+  -v /path/to/results:/workspace/results \
+  steve-training
+```
+
+Inside the container:
+
+```bash
+python3 -m steve_recommender.rl.train_paper_arch --tool <model/wire> --device cuda --workers 8
+```
+
+You can also run the upstream stEVE_training scripts directly:
+
+```bash
+cd /opt/eve_training
+python3 ./training_scripts/BasicWireNav_train.py -d cuda -nw 8 -lr 0.0002 --hidden 900 900 900 900 -en 500 -el 1 -n BasicWireNav
+```
+
+## 5) Start training (paper architecture, multi-worker)
 
 Recommended: run with `nohup` so it survives terminal closes/logouts.
 
@@ -72,7 +105,7 @@ Stop (graceful):
 kill -TERM "$(cat results/paper_runs/paper_standardj.pid)"
 ```
 
-## 5) Resume from a checkpoint
+## 6) Resume from a checkpoint
 
 ```bash
 conda activate master-project
@@ -84,7 +117,7 @@ bash scripts/train_paper.sh \
   --resume-from results/paper_runs/<run_folder>/checkpoints/checkpointXXXX.everl
 ```
 
-## 6) UI progress (TensorBoard: losses, reward, quality)
+## 7) UI progress (TensorBoard: losses, reward, quality)
 
 Install TensorBoard (once):
 

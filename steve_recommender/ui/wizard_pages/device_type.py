@@ -10,13 +10,13 @@ class DeviceTypePage(QWizardPage):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("Device Type")
-        self.setSubTitle("Is this device procedural or non‑procedural?")
+        self.setSubTitle("Choose the device type.")
 
         # Instruction
         lbl = QLabel("Please choose the device type:")
         lbl.setAlignment(Qt.AlignCenter)
 
-        # Two equally expanding buttons
+        # Three equally expanding buttons
         self.proc_btn = QPushButton("Procedural")
         self.nonproc_btn = QPushButton("Non‑Procedural")
         for btn in (self.proc_btn, self.nonproc_btn):
@@ -47,7 +47,11 @@ class DeviceTypePage(QWizardPage):
 
     def _on_choose(self):
         sender = self.sender()
-        is_proc = (sender is self.proc_btn)
         wiz = self.wizard()
-        wiz.isProcedural = is_proc
+        if sender is self.proc_btn:
+            wiz.device_type = "procedural"
+            wiz.isProcedural = True
+        elif sender is self.nonproc_btn:
+            wiz.device_type = "non_procedural"
+            wiz.isProcedural = False
         wiz.next()

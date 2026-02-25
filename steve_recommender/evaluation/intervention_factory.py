@@ -19,7 +19,9 @@ def build_aortic_arch_intervention(*, tool_ref: str, anatomy) -> Tuple[object, f
     )
     device = make_device(tool_ref)
 
-    simulation = eve.intervention.simulation.SofaBeamAdapter(friction=anatomy.friction)
+    simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
+        friction=anatomy.friction
+    )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,

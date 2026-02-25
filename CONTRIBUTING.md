@@ -103,7 +103,7 @@ git checkout main && git pull && git merge --ff-only dev && git push
 ## 6  Directory Overview
 
 ```
-steve_recommender/  # project package code (adapters/, domain/, services/, ui_nicegui/)
+steve_recommender/  # project package code (adapters/, domain/, services/, ui/)
 examples/           # runnable examples
 docs/               # Sphinx or markdown docs, images
 experiments/        # one‑off notebooks, scratch scripts

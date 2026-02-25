@@ -11,6 +11,8 @@ requires-python = ">=3.8"
 dependencies = [
     "eve @ git+https://github.com/lkarstensen/stEVE.git@f909e7122d846a3c2fec91eedddaa0ba88b6391d",
     "eve_rl @ git+https://github.com/lkarstensen/stEVE_rl.git@64222b7b74d113a6e965b58d5739b475f2c87a02",
+    "eve_bench @ git+https://github.com/lkarstensen/stEVE_bench.git@1c7640eca7ed3701d1651cedbfad8f5b71132ff2",
+    "aorticarchgenerator @ git+https://github.com/lkarstensen/2023_IJCARS_aortic_arch_generator.git@71a65cdac4eca9476344b590f6c7d97d1e8121db",
     "numpy",
     "PyYAML",
     "PyQt5",
@@ -20,13 +22,7 @@ dependencies = [
 [project.scripts]
 steve-eval = "steve_recommender.evaluation.run_cli:main"
 steve-train = "steve_recommender.rl.train_paper_arch:main"
-steve-ui = "steve_recommender.ui_nicegui.app:main"
-steve-uictl = "steve_recommender.ui_nicegui.cli:main"
-
-[project.optional-dependencies]
-ui = [
-    "nicegui>=1.4.37,<2",
-]
+steve-ui-qt = "steve_recommender.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

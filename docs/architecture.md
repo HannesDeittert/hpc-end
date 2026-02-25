@@ -21,9 +21,9 @@ stEVE integration isolated, business logic testable, and the UI thin.
    - Core training and evaluation logic.
    - CLI entrypoints still live here (`steve-train`, `steve-eval`).
 
-5) **UI** (`steve_recommender/ui_nicegui/`)
-   - NiceGUI UI that talks to services only.
-   - Entry point: `steve-ui`.
+5) **UI** (`steve_recommender/ui/` + `steve_recommender/main.py`)
+   - PyQt UI that talks to services only.
+   - Entry point: `steve-ui-qt`.
 
 ## Storage layout
 
@@ -88,12 +88,3 @@ use_non_mp_sim: true
 ```
 
 in the evaluation config so the scene graph is accessible from Python.
-
-## NiceGUI
-
-Install the optional UI dependency and start the app:
-
-```
-pip install -e .[ui]
-steve-ui
-```

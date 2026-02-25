@@ -82,11 +82,20 @@ class ToolWizard(QWizard):
         if self.currentId() == self.page_device_type_id:
             if getattr(self, "model_name", None) is None:
                 return self.page_model_select_id
-            return self.page_proc_start_id if getattr(self, "isProcedural", False) else self.page_nonproc_start_id
-        if getattr(self, "model_name", None) is None and self.currentId() == getattr(self, "page_model_select_id", -1):
-            return self.page_proc_start_id if getattr(self, "isProcedural", False) else self.page_nonproc_start_id
+            return self._branch_start_id()
+        if (
+            getattr(self, "model_name", None) is None
+            and self.currentId() == getattr(self, "page_model_select_id", -1)
+        ):
+            return self._branch_start_id()
         # otherwise fall back to normal sequencing
         return super().nextId()
+
+    def _branch_start_id(self) -> int:
+        device_type = getattr(self, "device_type", None)
+        if device_type == "non_procedural":
+            return self.page_nonproc_start_id
+        return self.page_proc_start_id
 
     def _on_page_changed(self, page_id: int):
         btn_next = self.button(QWizard.NextButton)
@@ -97,7 +106,4 @@ class ToolWizard(QWizard):
         else:
             btn_next.show()
             btn_back.show()
-
-
-
 

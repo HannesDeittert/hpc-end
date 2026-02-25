@@ -9,10 +9,12 @@ HERE = Path(__file__).resolve()
 
 
 def repo_root() -> Path:
+    markers = (".git", "pyproject.toml", "README.md")
     for parent in (HERE.parent, *HERE.parents):
-        if (parent / ".git").exists():
-            return parent
-    return HERE.parents[-1]
+        for marker in markers:
+            if (parent / marker).exists():
+                return parent
+    return HERE.parent
 
 
 def data_root() -> Path:

@@ -7,4 +7,8 @@ and load those devices without editing upstream stEVE code.
 
 from .registry import list_devices, load_device_class, make_device
 
-__all__ = ["list_devices", "load_device_class", "make_device"]
+__all__ = [
+    "list_devices",
+    "load_device_class",
+    "make_device",
+]

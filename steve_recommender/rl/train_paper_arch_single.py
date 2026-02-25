@@ -62,7 +62,9 @@ def build_intervention(tool_name: str, seed: int = 30) -> eve.intervention.MonoP
     vessel_tree = eve.intervention.vesseltree.AorticArch(seed=seed)
     device = make_device(tool_name)
 
-    simulation = eve.intervention.simulation.SofaBeamAdapter(friction=0.001)
+    simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
+        friction=0.001
+    )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,

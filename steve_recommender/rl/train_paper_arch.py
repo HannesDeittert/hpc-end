@@ -59,10 +59,16 @@ DEBUG_LEVEL = logging.INFO
 
 def build_intervention(tool_name: str, seed: int = 30) -> eve.intervention.MonoPlaneStatic:
     """Minimal wire-nav intervention using a stored guidewire."""
-    vessel_tree = eve.intervention.vesseltree.AorticArch(seed=seed)
+    vessel_tree = eve.intervention.vesseltree.AorticArchRandom(
+        episodes_between_change=1,
+        scale_diameter_array=[0.85],
+        arch_types_filter=[eve.intervention.vesseltree.ArchType.I],
+    )
     device = make_device(tool_name)
 
-    simulation = eve.intervention.simulation.SofaBeamAdapter(friction=0.001)
+    simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
+        friction=0.001
+    )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,

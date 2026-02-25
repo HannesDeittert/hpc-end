@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -8,7 +9,8 @@ import numpy as np
 import pyvista as pv
 import yaml
 from pyvistaqt import QtInteractor
-from PyQt5.QtCore import QProcess, QProcessEnvironment, Qt
+from PyQt5.QtCore import QProcess, QProcessEnvironment, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -31,9 +33,121 @@ from PyQt5.QtWidgets import (
 )
 
 from steve_recommender.anatomy.aortic_arch_dataset import AorticArchRecord
+from steve_recommender.evaluation.config import AorticArchSpec
 from steve_recommender.rl.trained_agent_discovery import trained_checkpoints_by_tool
 from steve_recommender.storage import list_models, list_wires
 from steve_recommender.ui.components.anatomy_select_dialog import AnatomySelectionDialog
+
+
+class _PlaybackWorker(QThread):
+    frame_ready = pyqtSignal(object)
+    log_line = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(
+        self,
+        *,
+        tool: str,
+        checkpoint: str,
+        anatomy: AorticArchSpec,
+        episodes: int,
+        max_steps: int,
+        device: str,
+        base_seed: int,
+        frame_stride: int,
+    ) -> None:
+        super().__init__()
+        self.tool = tool
+        self.checkpoint = checkpoint
+        self.anatomy = anatomy
+        self.episodes = int(episodes)
+        self.max_steps = int(max_steps)
+        self.device = device
+        self.base_seed = int(base_seed)
+        self.frame_stride = max(1, int(frame_stride))
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self.requestInterruption()
+
+    def _should_stop(self) -> bool:
+        return self._stop.is_set() or self.isInterruptionRequested()
+
+    def run(self) -> None:  # noqa: C901 - self-contained worker loop
+        algo = None
+        env = None
+        try:
+            import torch
+
+            from steve_recommender.adapters import eve_rl
+            from steve_recommender.evaluation.intervention_factory import (
+                build_aortic_arch_intervention,
+            )
+            from steve_recommender.rl.bench_env import BenchEnv
+
+            intervention, _ = build_aortic_arch_intervention(
+                tool_ref=self.tool, anatomy=self.anatomy
+            )
+            env = BenchEnv(
+                intervention=intervention,
+                mode="eval",
+                visualisation=True,
+                n_max_steps=self.max_steps,
+            )
+
+            device = torch.device(self.device)
+            algo = eve_rl.algo.AlgoPlayOnly.from_checkpoint(self.checkpoint)
+            algo.to(device)
+
+            seed = self.base_seed
+            for ep in range(self.episodes):
+                if self._should_stop():
+                    break
+                self.log_line.emit(
+                    f"[ui] embedded play episode {ep + 1}/{self.episodes} seed={seed}"
+                )
+                algo.reset()
+                obs, _ = env.reset(seed=seed)
+                obs_flat, _ = eve_rl.util.flatten_obs(obs)
+                step = 0
+
+                while True:
+                    if self._should_stop():
+                        break
+                    action = algo.get_eval_action(obs_flat)
+                    if not isinstance(action, np.ndarray):
+                        action = np.asarray(action, dtype=np.float32)
+
+                    env_action = action.reshape(env.action_space.shape)
+                    env_action = (env_action + 1.0) / 2.0 * (
+                        env.action_space.high - env.action_space.low
+                    ) + env.action_space.low
+
+                    obs, _, terminal, truncation, _ = env.step(env_action)
+                    obs_flat, _ = eve_rl.util.flatten_obs(obs)
+                    frame = env.render()
+                    if frame is not None and step % self.frame_stride == 0:
+                        self.frame_ready.emit(frame)
+
+                    step += 1
+                    if terminal or truncation:
+                        break
+                seed += 1
+        except Exception as exc:  # noqa: BLE001
+            self.log_line.emit(f"[ui] embedded playback error: {exc}")
+        finally:
+            if algo is not None:
+                try:
+                    algo.close()
+                except Exception:
+                    pass
+            if env is not None:
+                try:
+                    env.close()
+                except Exception:
+                    pass
+            self.finished.emit()
 
 
 class EvaluateWidget(QWidget):
@@ -117,8 +231,33 @@ class EvaluateWidget(QWidget):
         self.btn_play.clicked.connect(self._start_play)
         self.btn_play.setEnabled(False)
 
+        # --- Embedded playback ---
+        self.play_episodes = QSpinBox()
+        self.play_episodes.setRange(1, 1000)
+        self.play_episodes.setValue(1)
+        self.play_frame_stride = QSpinBox()
+        self.play_frame_stride.setRange(1, 120)
+        self.play_frame_stride.setValue(2)
+
+        self.btn_play_embedded = QPushButton("Play embedded")
+        self.btn_play_embedded.clicked.connect(self._start_play_embedded)
+        self.btn_play_embedded.setEnabled(False)
+        self.btn_stop_embedded = QPushButton("Stop playback")
+        self.btn_stop_embedded.clicked.connect(self._stop_play_embedded)
+        self.btn_stop_embedded.setEnabled(False)
+
+        self.playback_view = QLabel("Embedded playback will appear here.")
+        self.playback_view.setAlignment(Qt.AlignCenter)
+        self.playback_view.setMinimumHeight(240)
+        self.playback_view.setStyleSheet(
+            "background: #101214; color: #d8dbe2; border: 1px solid #2b2f36;"
+        )
+
         self.log = QTextEdit(readOnly=True)
         self.log.setPlaceholderText("Evaluation output will appear here…")
+
+        self._playback_worker: Optional[_PlaybackWorker] = None
+        self._last_pixmap: Optional[QPixmap] = None
 
         # Layout
         anatomy_box = QGroupBox("1) Anatomy")
@@ -163,6 +302,19 @@ class EvaluateWidget(QWidget):
         run_layout.addWidget(self.btn_play)
         run_layout.addStretch()
 
+        playback_box = QGroupBox("6) Playback (embedded)")
+        playback_layout = QVBoxLayout(playback_box)
+        playback_layout.addWidget(self.playback_view, 1)
+        playback_controls = QHBoxLayout()
+        playback_controls.addWidget(QLabel("Episodes"))
+        playback_controls.addWidget(self.play_episodes)
+        playback_controls.addWidget(QLabel("Render stride"))
+        playback_controls.addWidget(self.play_frame_stride)
+        playback_controls.addStretch()
+        playback_controls.addWidget(self.btn_play_embedded)
+        playback_controls.addWidget(self.btn_stop_embedded)
+        playback_layout.addLayout(playback_controls)
+
         left = QVBoxLayout()
         left.addWidget(anatomy_box, 2)
         left.addWidget(agents_box, 2)
@@ -171,6 +323,7 @@ class EvaluateWidget(QWidget):
         right.addWidget(params_box, 0)
         right.addWidget(scoring_box, 0)
         right.addWidget(run_box, 0)
+        right.addWidget(playback_box, 2)
         right.addWidget(self.log, 1)
 
         main = QHBoxLayout(self)
@@ -318,7 +471,7 @@ class EvaluateWidget(QWidget):
     # ------------------------------------------------------------------
     # Config writing + evaluation process
     # ------------------------------------------------------------------
-    def _build_config_dict(self) -> Dict:
+    def _build_anatomy_spec(self) -> AorticArchSpec:
         if self._selected_anatomy is None:
             raise RuntimeError("No anatomy selected")
 
@@ -326,16 +479,32 @@ class EvaluateWidget(QWidget):
         if not branches:
             branches = ["lcca"]
 
+        return AorticArchSpec(
+            arch_type=self._selected_anatomy.arch_type,
+            seed=int(self._selected_anatomy.seed),
+            rotation_yzx_deg=list(self._selected_anatomy.rotation_yzx_deg)
+            if self._selected_anatomy.rotation_yzx_deg
+            else None,
+            scaling_xyzd=list(self._selected_anatomy.scaling_xyzd)
+            if self._selected_anatomy.scaling_xyzd
+            else None,
+            omit_axis=self._selected_anatomy.omit_axis,
+            target_branches=branches,
+            target_threshold_mm=float(self.target_threshold.value()),
+        )
+
+    def _build_config_dict(self) -> Dict:
+        anatomy_spec = self._build_anatomy_spec()
         anatomy = {
             "type": "aortic_arch",
-            "arch_type": self._selected_anatomy.arch_type,
-            "seed": int(self._selected_anatomy.seed),
-            "rotation_yzx_deg": list(self._selected_anatomy.rotation_yzx_deg) if self._selected_anatomy.rotation_yzx_deg else None,
-            "scaling_xyzd": list(self._selected_anatomy.scaling_xyzd) if self._selected_anatomy.scaling_xyzd else None,
-            "omit_axis": self._selected_anatomy.omit_axis,
-            "target_mode": "branch_end",
-            "target_branches": branches,
-            "target_threshold_mm": float(self.target_threshold.value()),
+            "arch_type": anatomy_spec.arch_type,
+            "seed": int(anatomy_spec.seed),
+            "rotation_yzx_deg": list(anatomy_spec.rotation_yzx_deg) if anatomy_spec.rotation_yzx_deg else None,
+            "scaling_xyzd": list(anatomy_spec.scaling_xyzd) if anatomy_spec.scaling_xyzd else None,
+            "omit_axis": anatomy_spec.omit_axis,
+            "target_mode": anatomy_spec.target_mode,
+            "target_branches": list(anatomy_spec.target_branches),
+            "target_threshold_mm": float(anatomy_spec.target_threshold_mm),
         }
 
         cfg = {
@@ -414,8 +583,8 @@ class EvaluateWidget(QWidget):
         if out:
             self.log.append(out.rstrip())
 
-    def _build_sofa_env(self) -> QProcessEnvironment:
-        env = QProcessEnvironment.systemEnvironment()
+    def _sofa_env_overrides(self) -> Dict[str, str]:
+        overrides: Dict[str, str] = {}
 
         # Detect conda prefix (used for libpython3.8.so resolution in SofaPython3).
         conda_prefix = os.environ.get("CONDA_PREFIX") or sys.prefix
@@ -424,7 +593,6 @@ class EvaluateWidget(QWidget):
         if not sofa_root:
             candidates = [
                 str(Path.home() / "opt" / "Sofa_v23.06.00_Linux" / "SOFA_v23.06.00_Linux"),
-                str(Path.home() / "opt" / "SOFA_v23.06.00_Linux" / "SOFA_v23.06.00_Linux"),
             ]
             for c in candidates:
                 if Path(c, "plugins", "SofaPython3").exists():
@@ -432,17 +600,38 @@ class EvaluateWidget(QWidget):
                     break
 
         if sofa_root:
-            env.insert("SOFA_ROOT", sofa_root)
-            sofa_py = str(Path(sofa_root) / "plugins" / "SofaPython3" / "lib" / "python3" / "site-packages")
-            old_py = env.value("PYTHONPATH", "")
-            env.insert("PYTHONPATH", f"{sofa_py}:{old_py}" if old_py else sofa_py)
+            overrides["SOFA_ROOT"] = sofa_root
+            sofa_py = str(
+                Path(sofa_root) / "plugins" / "SofaPython3" / "lib" / "python3" / "site-packages"
+            )
+            old_py = os.environ.get("PYTHONPATH", "")
+            if sofa_py in old_py.split(":"):
+                overrides["PYTHONPATH"] = old_py
+            else:
+                overrides["PYTHONPATH"] = f"{sofa_py}:{old_py}" if old_py else sofa_py
 
         # Prepend conda lib path
         conda_lib = str(Path(conda_prefix) / "lib")
-        old_ld = env.value("LD_LIBRARY_PATH", "")
-        env.insert("LD_LIBRARY_PATH", f"{conda_lib}:{old_ld}" if old_ld else conda_lib)
+        old_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        if conda_lib in old_ld.split(":"):
+            overrides["LD_LIBRARY_PATH"] = old_ld
+        else:
+            overrides["LD_LIBRARY_PATH"] = f"{conda_lib}:{old_ld}" if old_ld else conda_lib
 
+        return overrides
+
+    def _apply_sofa_env_in_process(self) -> None:
+        for key, value in self._sofa_env_overrides().items():
+            os.environ[key] = value
+
+    def _build_sofa_env(self) -> QProcessEnvironment:
+        env = QProcessEnvironment.systemEnvironment()
+        for key, value in self._sofa_env_overrides().items():
+            env.insert(key, value)
         return env
+
+    def _is_playback_running(self) -> bool:
+        return self._playback_worker is not None and self._playback_worker.isRunning()
 
     def _update_run_enabled(self):
         has_agents = len(self._collect_agents()) > 0
@@ -450,6 +639,104 @@ class EvaluateWidget(QWidget):
         enabled = bool(has_agents and has_anatomy)
         self.btn_run.setEnabled(enabled)
         self.btn_play.setEnabled(enabled)
+        if self._is_playback_running():
+            self.btn_play_embedded.setEnabled(False)
+            self.btn_stop_embedded.setEnabled(True)
+        else:
+            self.btn_play_embedded.setEnabled(enabled)
+            self.btn_stop_embedded.setEnabled(False)
+
+    # ------------------------------------------------------------------
+    # Embedded playback
+    # ------------------------------------------------------------------
+    def _start_play_embedded(self):
+        if self._is_playback_running():
+            self.log.append("[ui] embedded playback already running")
+            return
+
+        if self._selected_anatomy is None:
+            self.log.append("[ui] no anatomy selected")
+            return
+
+        agents = self._collect_agents()
+        if not agents:
+            self.log.append("[ui] no agent configured")
+            return
+
+        try:
+            anatomy_spec = self._build_anatomy_spec()
+        except Exception as e:
+            self.log.append(f"[ui] error: {e}")
+            return
+
+        agent = agents[0]
+        tool = agent["tool"]
+        checkpoint = agent["checkpoint"]
+
+        self._apply_sofa_env_in_process()
+        os.environ.setdefault("SDL_VIDEO_WINDOW_POS", "-2000,-2000")
+
+        self.playback_view.clear()
+        self.playback_view.setText("Starting embedded playback...")
+        self._last_pixmap = None
+
+        worker = _PlaybackWorker(
+            tool=tool,
+            checkpoint=checkpoint,
+            anatomy=anatomy_spec,
+            episodes=int(self.play_episodes.value()),
+            max_steps=int(self.max_steps.value()),
+            device=self.policy_device.currentText(),
+            base_seed=int(self.base_seed.value()),
+            frame_stride=int(self.play_frame_stride.value()),
+        )
+        worker.frame_ready.connect(self._update_playback_frame)
+        worker.log_line.connect(lambda line: self.log.append(line))
+        worker.finished.connect(self._on_playback_finished)
+        self._playback_worker = worker
+        worker.start()
+        self._update_run_enabled()
+
+        self.log.append(
+            f"[ui] embedded playback started: tool={tool} ckpt={checkpoint} arch={self._selected_anatomy.record_id}"
+        )
+
+    def _stop_play_embedded(self):
+        if not self._is_playback_running():
+            return
+        self.log.append("[ui] stopping embedded playback...")
+        if self._playback_worker is not None:
+            self._playback_worker.stop()
+
+    def _on_playback_finished(self):
+        self._playback_worker = None
+        self._update_run_enabled()
+        self.log.append("[ui] embedded playback finished")
+
+    def _update_playback_frame(self, frame: np.ndarray):
+        if frame is None:
+            return
+        if frame.ndim != 3 or frame.shape[2] not in (3, 4):
+            return
+        if frame.dtype != np.uint8:
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
+        frame = np.ascontiguousarray(frame)
+        height, width, channels = frame.shape
+        fmt = QImage.Format_RGB888 if channels == 3 else QImage.Format_RGBA8888
+        image = QImage(frame.data, width, height, frame.strides[0], fmt).copy()
+        self._last_pixmap = QPixmap.fromImage(image)
+        self._set_playback_pixmap()
+
+    def _set_playback_pixmap(self) -> None:
+        if self._last_pixmap is None:
+            return
+        target = self.playback_view.size()
+        if target.width() <= 0 or target.height() <= 0:
+            return
+        scaled = self._last_pixmap.scaled(
+            target, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self.playback_view.setPixmap(scaled)
 
     # ------------------------------------------------------------------
     # Play agent on anatomy (SofaPygame)
@@ -496,3 +783,13 @@ class EvaluateWidget(QWidget):
         proc.start()
 
         self._play_proc = proc  # keep reference
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming convention
+        super().resizeEvent(event)
+        self._set_playback_pixmap()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming convention
+        self._stop_play_embedded()
+        if self._playback_worker is not None and self._playback_worker.isRunning():
+            self._playback_worker.wait(2000)
+        super().closeEvent(event)

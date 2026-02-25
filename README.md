@@ -45,7 +45,7 @@ $ cd steve-recommender
 $ mamba create -n env_name python=3.8 -y
 $ conda activate env_name
 ```
-4. **Install the package (pulls stEVE dependencies via git pins)**
+4. **Install the package (pulls stEVE + stEVE_rl + stEVE_bench + aorticarchgenerator via git pins)**
 ```bash
 $ pip install -e .
 ```
@@ -83,21 +83,12 @@ Repo-local evaluation pipeline to benchmark **multiple trained agents** (each wi
 - Outputs: `results/eval_runs/<timestamp>_<name>/summary.csv` + `trials/*.npz`
 
 ---
-## UI (NiceGUI, optional)
+## UI (Qt)
 
-NiceGUI UI for browsing models/wires, launching training, and running evaluation.
-
-```bash
-$ pip install -e .[ui]
-$ steve-ui
-```
-
-Background management (creates a pid/log under `~/.local/state/steve-recommender/`):
+Desktop UI for browsing models/wires, launching training, and running evaluation.
 
 ```bash
-$ steve-uictl start
-$ steve-uictl status
-$ steve-uictl stop
+$ steve-ui-qt
 ```
 
 ---

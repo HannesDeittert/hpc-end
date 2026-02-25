@@ -28,7 +28,9 @@ def build_env(device_name: str, seed: int = 0) -> eve.Env:
     vessel_tree = eve.intervention.vesseltree.AorticArch(seed=seed)
     device = make_device(device_name)
 
-    simulation = eve.intervention.simulation.SofaBeamAdapter(friction=0.001)
+    simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
+        friction=0.001
+    )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,
