@@ -19,9 +19,9 @@ while IFS=$'\t' read -r run_dir job_id sbatch_file description; do
   job_id="${job_id:-NA}"
   sbatch_file="${sbatch_file:-}"
   description="${description:-}"
+  # Allow NA / empty for interactive runs (no sbatch file).
   if [[ -z "$sbatch_file" ]]; then
-    echo "skip (missing sbatch file): $run_dir" >&2
-    continue
+    sbatch_file="NA"
   fi
   echo "[info] capture $run_dir (job_id=$job_id)"
   bash "$(dirname "$0")/hpc_capture_run.sh" "$run_dir" "$job_id" "$sbatch_file" "$description"

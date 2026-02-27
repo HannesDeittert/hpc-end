@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 3 ]]; then
-  echo "Usage: $0 <run_dir> <job_id|NA> <sbatch_file> [description]" >&2
+  echo "Usage: $0 <run_dir> <job_id|NA> <sbatch_file|NA> [description]" >&2
   exit 1
 fi
 
@@ -15,17 +15,31 @@ if [[ ! -d "$run_dir" ]]; then
   echo "run_dir not found: $run_dir" >&2
   exit 1
 fi
-if [[ ! -f "$sbatch_file" ]]; then
+
+sbatch_file_missing=false
+case "${sbatch_file,,}" in
+  ""|"na"|"none"|"-")
+    sbatch_file_missing=true
+    ;;
+esac
+
+if [[ "$sbatch_file_missing" == false && ! -f "$sbatch_file" ]]; then
   echo "sbatch_file not found: $sbatch_file" >&2
   exit 1
 fi
 
 mkdir -p "$run_dir"
-cp -f "$sbatch_file" "$run_dir/job.sbatch"
+if [[ "$sbatch_file_missing" == false ]]; then
+  cp -f "$sbatch_file" "$run_dir/job.sbatch"
+  SBATCH_FILE_NAME="job.sbatch"
+else
+  SBATCH_FILE_NAME=""
+fi
 
 export RUN_DIR="$run_dir"
 export JOB_ID="$job_id"
 export DESC="$description"
+export SBATCH_FILE_NAME
 
 sacct_out="$run_dir/job.sacct.txt"
 if [[ "$job_id" == "NA" || "$job_id" == "-" || "$job_id" == "none" ]]; then
@@ -68,7 +82,7 @@ payload = {
     "run_dir": run_dir,
     "job_id": job_id,
     "job": job,
-    "sbatch_file": "job.sbatch",
+    "sbatch_file": os.environ.get("SBATCH_FILE_NAME") or None,
     "description": desc,
     "captured_at": datetime.utcnow().isoformat() + "Z",
     "user": os.environ.get("USER", ""),
