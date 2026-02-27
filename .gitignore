@@ -23,6 +23,8 @@ build/
 # --- Build & Logs ---
 results/
 logs/
+!logs/hpc/
+!logs/hpc/**
 *.log
 data/
 

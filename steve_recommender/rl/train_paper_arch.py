@@ -1,6 +1,6 @@
 """Paper-style SAC training (stEVE_rl) from your own codebase.
 
-This mirrors stEVE_training/training_scripts/BasicWireNav_train.py
+This mirrors stEVE_training/training_scripts/ArchVariety_train.py
 but loads a device from data/<tool_name>/tool.py.
 
 Example:
@@ -38,7 +38,109 @@ from steve_recommender.storage import parse_wire_ref, repo_root
 REPO_ROOT = repo_root()
 
 
-# Defaults adapted from stEVE_training BasicWireNav_train.
+# Defaults adapted from stEVE_training ArchVariety_train.
+EVAL_SEEDS = [
+    1,
+    2,
+    3,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    16,
+    17,
+    18,
+    21,
+    22,
+    23,
+    27,
+    31,
+    34,
+    35,
+    37,
+    39,
+    42,
+    43,
+    44,
+    47,
+    48,
+    50,
+    52,
+    55,
+    56,
+    58,
+    61,
+    62,
+    63,
+    68,
+    69,
+    70,
+    71,
+    73,
+    79,
+    80,
+    81,
+    84,
+    89,
+    91,
+    92,
+    93,
+    95,
+    97,
+    102,
+    103,
+    108,
+    109,
+    110,
+    115,
+    116,
+    117,
+    118,
+    120,
+    122,
+    123,
+    124,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    134,
+    136,
+    138,
+    139,
+    140,
+    141,
+    142,
+    143,
+    144,
+    147,
+    148,
+    149,
+    150,
+    151,
+    152,
+    154,
+    155,
+    156,
+    158,
+    159,
+    161,
+    162,
+    167,
+    168,
+    171,
+    175,
+]
+EVAL_SEEDS_STR = ",".join(str(seed) for seed in EVAL_SEEDS)
+ARCHVARIETY_RESULTS_DIR = REPO_ROOT / "results" / "eve_paper" / "neurovascular" / "aorta" / "gw_only" / "arch_vmr_94"
 HEATUP_STEPS = 5e5
 TRAINING_STEPS = 2e7
 CONSECUTIVE_EXPLORE_EPISODES = 100
@@ -58,7 +160,7 @@ DEBUG_LEVEL = logging.INFO
 
 
 def build_intervention(tool_name: str, seed: int = 30) -> eve.intervention.MonoPlaneStatic:
-    """Minimal wire-nav intervention using a stored guidewire."""
+    """ArchVariety-style intervention using the provided tool."""
     vessel_tree = eve.intervention.vesseltree.AorticArchRandom(
         episodes_between_change=1,
         scale_diameter_array=[0.85],
@@ -67,13 +169,15 @@ def build_intervention(tool_name: str, seed: int = 30) -> eve.intervention.MonoP
     device = make_device(tool_name)
 
     simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
-        friction=0.001
+        friction=0.1
     )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,
         image_frequency=7.5,
-        image_rot_zx=[20, 5],
+        image_rot_zx=[25, 0],
+        image_center=[0, 0, 0],
+        field_of_view=None,
     )
     target = eve.intervention.target.CenterlineRandom(
         vessel_tree=vessel_tree,
@@ -88,7 +192,7 @@ def build_intervention(tool_name: str, seed: int = 30) -> eve.intervention.MonoP
         fluoroscopy=fluoroscopy,
         target=target,
         stop_device_at_tree_end=True,
-        normalize_action=True,
+        normalize_action=False,
     )
     return intervention
 
@@ -124,21 +228,21 @@ def parse_args() -> argparse.Namespace:
         "-lr",
         "--learning_rate",
         type=float,
-        default=3.2e-4,
+        default=0.0003217978434614328,
         help="Learning rate",
     )
     parser.add_argument(
         "--hidden",
         nargs="+",
         type=int,
-        default=[900, 900, 900, 900],
+        default=[400, 400, 400],
         help="Hidden layers for policy/Q networks",
     )
     parser.add_argument(
         "-en",
         "--embedder_nodes",
         type=int,
-        default=500,
+        default=700,
         help="Nodes per embedder layer (LSTM in paper)",
     )
     parser.add_argument(
@@ -151,7 +255,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=str,
-        default=str(REPO_ROOT / "results" / "paper_runs"),
+        default=str(ARCHVARIETY_RESULTS_DIR),
         help="Base output folder for results/checkpoints/configs",
     )
     parser.add_argument(
@@ -207,6 +311,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Number of evaluation episodes per eval call.",
+    )
+    parser.add_argument(
+        "--eval-seeds",
+        type=str,
+        default=EVAL_SEEDS_STR,
+        help="Comma-separated eval seeds (ArchVariety uses a fixed list). Use '' to disable.",
     )
     parser.add_argument(
         "--explore-episodes-between-updates",
@@ -295,6 +405,14 @@ def _latest_checkpoint(checkpoint_folder: Path) -> Optional[Path]:
 
 
 def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
+    if args.eval_seeds is None:
+        eval_seeds = None
+    else:
+        eval_seeds_str = args.eval_seeds.strip()
+        if not eval_seeds_str or eval_seeds_str.lower() == "none":
+            eval_seeds = None
+        else:
+            eval_seeds = [int(seed) for seed in eval_seeds_str.split(",") if seed.strip()]
     return TrainingConfig(
         tool=args.tool,
         model=args.model,
@@ -311,6 +429,7 @@ def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
         training_steps=args.training_steps,
         eval_every=args.eval_every,
         eval_episodes=args.eval_episodes,
+        eval_seeds=eval_seeds,
         explore_episodes_between_updates=args.explore_episodes_between_updates,
         update_per_explore_step=args.update_per_explore_step,
         consecutive_action_steps=args.consecutive_action_steps,
@@ -365,6 +484,7 @@ def run_training(cfg: TrainingConfig) -> Path:
         "[train] "
         f"heatup_steps={int(cfg.heatup_steps)} training_steps={int(cfg.training_steps)} "
         f"eval_every={int(cfg.eval_every)} eval_episodes={cfg.eval_episodes} "
+        f"eval_seeds={'set' if cfg.eval_seeds else 'none'} "
         f"batch_size={cfg.batch_size} replay_buffer_size={int(cfg.replay_buffer_size)} "
         f"explore_episodes_between_updates={cfg.explore_episodes_between_updates} "
         f"update_per_explore_step={cfg.update_per_explore_step} "
@@ -387,6 +507,7 @@ def run_training(cfg: TrainingConfig) -> Path:
         "TRAINING_STEPS": cfg.training_steps,
         "EXPLORE_STEPS_BTW_EVAL": cfg.eval_every,
         "EVAL_EPISODES": cfg.eval_episodes,
+        "EVAL_SEEDS": (cfg.eval_seeds or []),
         "CONSECUTIVE_EXPLORE_EPISODES": cfg.explore_episodes_between_updates,
         "UPDATE_PER_EXPLORE_STEP": cfg.update_per_explore_step,
         "CONSECUTIVE_ACTION_STEPS": cfg.consecutive_action_steps,
@@ -536,14 +657,15 @@ def run_training(cfg: TrainingConfig) -> Path:
     t.start()
 
     try:
+        eval_episodes = None if cfg.eval_seeds else cfg.eval_episodes
         runner.training_run(
             heatup_steps_to_run,
             cfg.training_steps,
             cfg.eval_every,
             cfg.explore_episodes_between_updates,
             cfg.update_per_explore_step,
-            eval_episodes=cfg.eval_episodes,
-            eval_seeds=None,
+            eval_episodes=eval_episodes,
+            eval_seeds=cfg.eval_seeds,
         )
     except KeyboardInterrupt:
         print("[train] interrupted (Ctrl+C) - shutting down cleanly...", flush=True)
