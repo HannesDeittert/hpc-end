@@ -1,0 +1,23 @@
+{
+  "name": "StandardJ035_PTFE",
+  "description": "0.035\" (0.89 mm) PTFE-coated steel guidewire with 3 mm J-tip, 180° bend. Tip softer than shaft (E_tip 60 GPa vs E_shaft 180 GPa).",
+  "type": "procedural",
+  "model": "TestModel_StandardJ035",
+  "spec": {
+    "length_mm": 1500,
+    "outer_diameter_mm": 0.89,
+    "inner_diameter_mm": 0.0,
+    "tip_radius_mm": 3.0,
+    "tip_angle_deg": 180,
+    "poisson_ratio": 0.38,
+    "young_modulus_tip_Pa": 60000000000.0,
+    "young_modulus_shaft_Pa": 180000000000.0,
+    "mass_density_tip_kg_m3": 7500,
+    "mass_density_shaft_kg_m3": 7800,
+    "velocity_limit_mm_s__rad_s": [20.0, 6.0],
+    "notes": {
+      "flexible_distal_zone_mm": "30-50 (not explicitly represented in 2-segment procedural shape)"
+    }
+  }
+}
+

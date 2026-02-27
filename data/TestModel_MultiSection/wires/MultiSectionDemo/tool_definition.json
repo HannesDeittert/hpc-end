@@ -1,0 +1,6 @@
+{
+  "name": "MultiSectionDemo",
+  "description": "Two-material shaft + tip test",
+  "type": "multi_section",
+  "model": "TestModel_MultiSection"
+}

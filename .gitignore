@@ -26,7 +26,6 @@ logs/
 !logs/hpc/
 !logs/hpc/**
 *.log
-data/
 
 # --- SOFA artefacts (falls lokal kompiliert) ---
 bin/

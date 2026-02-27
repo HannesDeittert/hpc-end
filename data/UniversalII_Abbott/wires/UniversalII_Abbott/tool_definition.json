@@ -1,0 +1,31 @@
+{
+  "name": "UniversalII_Abbott",
+  "description": "Abbott Universal II 0.014\" (0.3556 mm) straight-tip wire with 45 mm soft distal segment.",
+  "type": "procedural",
+  "model": "UniversalII_Abbott",
+  "spec": {
+    "length_mm": 1900,
+    "straight_length_mm": 1855,
+    "tip_length_mm": 45,
+    "straight_outer_diameter_mm": 0.3556,
+    "straight_inner_diameter_mm": 0.0,
+    "tip_outer_diameter_mm": 0.3556,
+    "tip_inner_diameter_mm": 0.0,
+    "tip_angle_rad": 0.0,
+    "tip_radius_mm": 0.0,
+    "poisson_ratio": 0.33,
+    "young_modulus_shaft_Pa": 8930000000.0,
+    "young_modulus_tip_Pa": 1270000000.0,
+    "mass_density_shaft_kg_m3": 2500,
+    "mass_density_tip_kg_m3": 4000,
+    "velocity_limit_mm_s__rad_s": [
+      20.0,
+      6.0
+    ],
+    "notes": {
+      "source": "Values transcribed from the provided spreadsheet image.",
+      "straight_length": "Computed as length - 45 mm (tip length).",
+      "discretization": "Uses StandardJ035_PTFE defaults (visu 0.5, collis 2.0/0.1, beams 1.4/0.09)."
+    }
+  }
+}
