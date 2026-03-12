@@ -309,29 +309,37 @@ if __name__ == "__main__":
     runner.save_config(runner_config)
 
     heatup_steps_to_run = heatup_steps
+    training_steps_target = training_steps
     if args.resume_from:
         resume_path = os.path.abspath(args.resume_from)
         if not os.path.isfile(resume_path):
             raise FileNotFoundError(f"--resume-from not found: {resume_path}")
         logging.getLogger(__name__).info("Loading checkpoint: %s", resume_path)
         agent.load_checkpoint(resume_path)
+        current_explore = int(agent.step_counter.exploration)
+        # Runner.training_run expects an absolute exploration-step target.
+        # When resuming, treat a smaller/equal value as "additional steps".
+        if training_steps <= current_explore:
+            additional_steps = max(training_steps, 1)
+            training_steps_target = current_explore + additional_steps
         if args.resume_skip_heatup:
             heatup_steps_to_run = 0
         logging.getLogger(__name__).info(
             (
                 "Loaded counters heatup=%d explore=%d update=%d eval=%d "
-                "| heatup_steps_run=%d"
+                "| heatup_steps_run=%d training_steps_target=%d"
             ),
             int(agent.step_counter.heatup),
-            int(agent.step_counter.exploration),
+            current_explore,
             int(agent.step_counter.update),
             int(agent.step_counter.evaluation),
             heatup_steps_to_run,
+            training_steps_target,
         )
 
     runner.training_run(
         heatup_steps_to_run,
-        training_steps,
+        training_steps_target,
         explore_steps_between_eval,
         explore_episodes_between_updates,
         UPDATE_PER_EXPLORE_STEP,
