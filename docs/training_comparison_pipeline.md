@@ -80,6 +80,9 @@ python3 scripts/compare_archvar_history.py \
 Use this when you want a clean physical comparison where each checkpoint is
 explicitly tied to the tool used during training.
 
+`scripts/eval_checkpoint_manifest.py` is a compatibility wrapper and now routes
+through the shared comparison/evaluation core.
+
 1. Build an evaluation manifest from the index:
 
 ```bash

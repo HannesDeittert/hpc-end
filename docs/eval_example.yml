@@ -14,12 +14,15 @@ agents:
 # Trials per agent (same seeds for all agents for fair comparison).
 n_trials: 3
 base_seed: 123
+# Optional explicit seeds (overrides n_trials/base_seed):
+# seeds: [123, 127, 175]
 
 # Truncation limit.
 max_episode_steps: 1000
 
 # Policy inference device. Use "cpu" if training is already using your GPU.
 policy_device: cuda
+stochastic_eval: false
 
 # Must be true if you want SOFA force scalars (wall_lcp_*, wall_*_force_norm).
 use_non_mp_sim: true

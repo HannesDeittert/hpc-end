@@ -7,5 +7,6 @@ Bitte nur finale, kleine Dateien committen (keine Roh‑Checkpoints).
 Useful developer docs:
 - `docs/training_pipeline.md`
 - `docs/evaluation_pipeline.md`
+- `docs/compare_example.yml`
 - `docs/anatomy_dataset.md`
 - `docs/architecture.md`

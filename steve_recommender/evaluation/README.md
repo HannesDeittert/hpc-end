@@ -25,6 +25,25 @@ Run:
 steve-eval --config docs/eval_example.yml
 ```
 
+Or use the comparison entrypoint (registry-aware candidate resolution):
+
+```bash
+steve-compare --config docs/compare_example.yml
+```
+
+Enable Sofa window rendering from CLI (without editing YAML):
+
+```bash
+steve-compare --config docs/compare_example.yml --visualize --visualize-trials-per-agent 1
+steve-eval --config docs/eval_example.yml --visualize --visualize-trials-per-agent 1
+```
+
+List available `agent_ref` values:
+
+```bash
+steve-compare --list-agent-refs
+```
+
 Outputs:
 - `results/eval_runs/<timestamp>_<name>/summary.csv` (per trial)
 - `results/eval_runs/<timestamp>_<name>/trials/*.npz` (time series)
@@ -36,9 +55,13 @@ Top-level keys (see `docs/eval_example.yml`):
 - `name`: run name (used for output folder)
 - `agents`: list of `{name, tool, checkpoint}`
 - `n_trials`, `base_seed`
+- `seeds` (optional explicit seed list, overrides `n_trials/base_seed`)
 - `max_episode_steps`
 - `policy_device`: `"cuda"` or `"cpu"`
 - `use_non_mp_sim`: set `true` if you want SOFA force scalars
+- `stochastic_eval`: `false` by default (deterministic policy eval)
+- `visualize`: open Sofa window while evaluating (optional)
+- `visualize_trials_per_agent`: how many early trials per agent are rendered
 - `output_root`
 - `anatomy`: currently only `type: aortic_arch`
 - `scoring`: optional scoring configuration (default is `mode: default_v1`)
@@ -87,6 +110,15 @@ Or build a config dict in the UI and convert it:
 ```python
 from steve_recommender.evaluation.config import config_from_dict
 cfg = config_from_dict(raw_dict)
+```
+
+Comparison core (registry-aware):
+
+```python
+from steve_recommender.services import comparison_from_dict, run_comparison
+
+cfg = comparison_from_dict(raw_dict)
+run_dir = run_comparison(cfg)
 ```
 
 ### UI checkpoint discovery

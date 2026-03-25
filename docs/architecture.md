@@ -19,7 +19,9 @@ stEVE integration isolated, business logic testable, and the UI thin.
 
 4) **Pipelines** (`steve_recommender/rl/` and `steve_recommender/evaluation/`)
    - Core training and evaluation logic.
-   - CLI entrypoints still live here (`steve-train`, `steve-eval`).
+   - Comparison orchestration (`steve_recommender/comparison/`) resolves
+     registry candidates into concrete tool+checkpoint pairs.
+   - CLI entrypoints: `steve-train`, `steve-eval`, `steve-compare`.
 
 5) **UI** (`steve_recommender/ui/` + `steve_recommender/main.py`)
    - PyQt UI that talks to services only.

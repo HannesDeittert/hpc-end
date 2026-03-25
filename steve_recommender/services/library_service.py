@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from steve_recommender.domain import AgentInfo, ModelInfo, WireInfo
 from steve_recommender.storage import (
@@ -93,3 +93,37 @@ def list_agents(model_name: str, wire_name: str) -> List[AgentInfo]:
             )
         )
     return agents
+
+
+def list_agent_refs() -> List[str]:
+    """Return all known registry refs in the form model/wire:agent."""
+
+    refs: List[str] = []
+    for model in _list_models():
+        for wire in _list_wires(model):
+            root = wire_agents_dir(model, wire)
+            if not root.exists():
+                continue
+            for child in sorted(root.iterdir()):
+                if child.is_dir():
+                    refs.append(f"{model}/{wire}:{child.name}")
+    return refs
+
+
+def list_agent_ref_metadata() -> List[Dict[str, str]]:
+    """Return lightweight metadata for UI dropdowns."""
+
+    out: List[Dict[str, str]] = []
+    for model in _list_models():
+        for wire in _list_wires(model):
+            for info in list_agents(model, wire):
+                out.append(
+                    {
+                        "agent_ref": f"{model}/{wire}:{info.name}",
+                        "model": model,
+                        "wire": wire,
+                        "agent": info.name,
+                        "checkpoint": str(info.checkpoint_path) if info.checkpoint_path else "",
+                    }
+                )
+    return out

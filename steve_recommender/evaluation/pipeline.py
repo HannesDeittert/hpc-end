@@ -104,6 +104,13 @@ def _finite_or(x: Any, default: float) -> float:
     return x if np.isfinite(x) else float(default)
 
 
+def _apply_stochastic_eval_mode(eval_agent: Any, stochastic_eval: bool) -> None:
+    """Set deterministic/stochastic eval mode on supported algos."""
+
+    if hasattr(eval_agent, "algo") and hasattr(eval_agent.algo, "stochastic_eval"):
+        eval_agent.algo.stochastic_eval = bool(stochastic_eval)
+
+
 def _write_report_files(run_dir: Path, *, cfg: EvaluationConfig, rows: List[Dict[str, Any]]) -> None:
     """Aggregate trial rows and write report.{json,md,csv}."""
 
@@ -281,7 +288,10 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
         trial_rows: List[Dict[str, Any]] = []
 
         # Same seeds for each agent for fair comparison.
-        seeds = [cfg.base_seed + i for i in range(cfg.n_trials)]
+        if cfg.seeds:
+            seeds = [int(s) for s in cfg.seeds]
+        else:
+            seeds = [cfg.base_seed + i for i in range(cfg.n_trials)]
 
         for agent_spec in cfg.agents:
             # Build intervention/environment for this tool/anatomy.
@@ -294,7 +304,9 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
             )
 
             # Switch simulation mode.
-            if cfg.use_non_mp_sim:
+            if cfg.visualize:
+                intervention.make_non_mp()
+            elif cfg.use_non_mp_sim:
                 intervention.make_non_mp()
             else:
                 intervention.make_mp()
@@ -382,8 +394,37 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
                 normalize_actions=True,
                 env_eval=env_eval,
             )
+            _apply_stochastic_eval_mode(eval_agent, cfg.stochastic_eval)
+
+            visualizer = None
+            # Env.reset() expects a visualisation object with a .reset() method.
+            # Keep a dummy visualiser for non-rendered trials instead of None.
+            dummy_visualizer = eve.visualisation.VisualisationDummy()
 
             for trial_idx, seed in enumerate(seeds):
+                show_trial = cfg.visualize and trial_idx < int(cfg.visualize_trials_per_agent)
+                if show_trial:
+                    if visualizer is None:
+                        visualizer = eve.visualisation.SofaPygame(
+                            env_eval.intervention,
+                            env_eval.interim_target,
+                        )
+                    env_eval.visualisation = visualizer
+                else:
+                    # Do not keep a stale pygame window open while running hidden trials.
+                    # Otherwise the window can appear frozen/unresponsive.
+                    if visualizer is not None:
+                        try:
+                            visualizer.close()
+                        except Exception:
+                            pass
+                        visualizer = None
+                    env_eval.visualisation = dummy_visualizer
+
+                print(
+                    f"[eval] {agent_spec.name} trial {trial_idx + 1}/{len(seeds)} "
+                    f"seed={seed} mode={'visual' if show_trial else 'headless'}"
+                )
                 t0 = time.perf_counter()
                 episodes = eval_agent.evaluate(episodes=1, seeds=[seed])
                 wall_time_s = time.perf_counter() - t0
@@ -501,6 +542,11 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
                 }
 
                 trial_rows.append(row)
+                print(
+                    f"[trial] {agent_spec.name} {trial_idx + 1}/{len(seeds)} "
+                    f"seed={seed} success={int(success)} reward={episode_reward:.4f} "
+                    f"steps={steps_total}"
+                )
 
                 # Write a CSV-friendly variant of the row (rounding + blanks instead of NaN).
                 writer.writerow({k: _csv_cell(row.get(k)) for k in summary_fields})
@@ -509,6 +555,11 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
             # Cleanup
             try:
                 eval_agent.close()
+            except Exception:
+                pass
+            try:
+                if visualizer is not None:
+                    visualizer.close()
             except Exception:
                 pass
 

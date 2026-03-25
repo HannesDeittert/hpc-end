@@ -1,6 +1,7 @@
 # Evaluation Pipeline (agent benchmark)
 
 This repo contains a **repo-local evaluation pipeline** (outside upstream stEVE repos) to benchmark **multiple trained agents** on a **fixed anatomy + start/target** setup.
+It is also used by the registry-aware comparison entrypoint (`steve-compare`).
 
 It is meant to be:
 - runnable from the **terminal** (YAML config),
@@ -18,6 +19,12 @@ For each configured agent (checkpoint + tool), the pipeline runs **N trials** wi
 - per-step **tip kinematics** (position + derived velocity)
 - per-step **actions / rewards / terminal / truncation**
 - *best-effort* **wall/contact force** scalars from SOFA (see notes below)
+
+### Deterministic vs stochastic behavior
+
+- Training includes exploration noise / stochastic action sampling.
+- Evaluation is deterministic by default (`stochastic_eval: false`).
+- Set `stochastic_eval: true` if you explicitly want sampling noise during evaluation runs.
 
 Currently supported anatomy:
 - `aortic_arch` (stEVE built-in generator)
@@ -56,6 +63,25 @@ source scripts/sofa_env.sh
 steve-eval --config docs/eval_example.yml
 ```
 
+Alternative (candidate resolver + same evaluator core):
+
+```bash
+steve-compare --config docs/compare_example.yml
+```
+
+List available registry refs:
+
+```bash
+steve-compare --list-agent-refs
+```
+
+Force Sofa window rendering from CLI:
+
+```bash
+steve-compare --config docs/compare_example.yml --visualize --visualize-trials-per-agent 1
+steve-eval --config docs/eval_example.yml --visualize --visualize-trials-per-agent 1
+```
+
 Outputs are written to `results/eval_runs/<timestamp>_<name>/`.
 
 ## Config format
@@ -65,9 +91,13 @@ Top-level keys:
 - `agents`: list of `{name, tool, checkpoint}`
 - `n_trials`: trials per agent
 - `base_seed`: base seed (trial seeds are `base_seed + i`)
+- `seeds`: optional explicit seed list (overrides `n_trials/base_seed`)
 - `max_episode_steps`: truncation limit
 - `policy_device`: `"cuda"` or `"cpu"` (policy inference device)
 - `use_non_mp_sim`: `true` to run SOFA in-process (required for force extraction)
+- `stochastic_eval`: policy sampling during eval (default: `false`, deterministic)
+- `visualize`: show Sofa window during eval
+- `visualize_trials_per_agent`: render only first N trials per agent
 - `output_root`: output directory root
 - `anatomy`: currently only `type: aortic_arch` is supported
 

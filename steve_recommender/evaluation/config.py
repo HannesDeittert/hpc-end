@@ -85,6 +85,7 @@ class EvaluationConfig:
     # How many evaluation trials per agent.
     n_trials: int = 10
     base_seed: int = 123
+    seeds: Optional[List[int]] = None
 
     # Environment settings.
     max_episode_steps: int = 1000
@@ -99,6 +100,9 @@ class EvaluationConfig:
     # If False, SOFA will run in a separate process (faster/safer) but forces are
     # not accessible with the current upstream API.
     use_non_mp_sim: bool = True
+    stochastic_eval: bool = False
+    visualize: bool = False
+    visualize_trials_per_agent: int = 1
 
     # Optional scoring configuration for post-processing.
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
@@ -177,16 +181,32 @@ def config_from_dict(raw: Dict[str, Any]) -> EvaluationConfig:
     anatomy = _to_anatomy_spec(raw.get("anatomy", {}))
     scoring = _to_scoring_config(raw.get("scoring"))
 
+    seeds_raw = raw.get("seeds")
+    seeds: Optional[List[int]]
+    if seeds_raw is None:
+        seeds = None
+    elif isinstance(seeds_raw, list):
+        seeds = [int(s) for s in seeds_raw]
+    elif isinstance(seeds_raw, str):
+        parts = [p.strip() for p in seeds_raw.split(",") if p.strip()]
+        seeds = [int(p) for p in parts]
+    else:
+        raise TypeError(f"seeds must be list[str/int], comma-string or null, got {type(seeds_raw)}")
+
     return EvaluationConfig(
         name=str(_require(raw, "name")),
         agents=agents,
         anatomy=anatomy,
         n_trials=int(raw.get("n_trials", 10)),
         base_seed=int(raw.get("base_seed", 123)),
+        seeds=seeds,
         max_episode_steps=int(raw.get("max_episode_steps", 1000)),
         output_root=str(raw.get("output_root", "results/eval_runs")),
         policy_device=str(raw.get("policy_device", "cuda")),
         use_non_mp_sim=bool(raw.get("use_non_mp_sim", True)),
+        stochastic_eval=bool(raw.get("stochastic_eval", False)),
+        visualize=bool(raw.get("visualize", False)),
+        visualize_trials_per_agent=int(raw.get("visualize_trials_per_agent", 1)),
         scoring=scoring,
     )
 
