@@ -1,9 +1,39 @@
 from __future__ import annotations
 
+import os
 from typing import Tuple
 
 from steve_recommender.devices import make_device
 from steve_recommender.adapters import eve
+
+
+class _SofaBeamAdapterSimulatedFixedWall(
+    eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter
+):
+    """Experiment-only variant: wall is simulated but collision-geometry-fixed.
+
+    We intentionally keep the vessel wall geometry static via ``moving=False``,
+    but set collision models to ``simulated=True`` so wall-side reactions can be
+    exposed through simulated collision mechanics.
+    """
+
+    def _add_vessel_tree(self, mesh_path):
+        vessel_object = self.root.addChild("vesselTree")
+        vessel_object.addObject(
+            "MeshObjLoader",
+            filename=mesh_path,
+            flipNormals=False,
+            name="meshLoader",
+        )
+        vessel_object.addObject(
+            "MeshTopology",
+            position="@meshLoader.position",
+            triangles="@meshLoader.triangles",
+        )
+        vessel_object.addObject("MechanicalObject", name="dofs", src="@meshLoader")
+        vessel_object.addObject("TriangleCollisionModel", moving=False, simulated=True)
+        vessel_object.addObject("LineCollisionModel", moving=False, simulated=True)
+        self._vessel_object = vessel_object
 
 
 def build_aortic_arch_intervention(*, tool_ref: str, anatomy) -> Tuple[object, float]:
@@ -19,9 +49,12 @@ def build_aortic_arch_intervention(*, tool_ref: str, anatomy) -> Tuple[object, f
     )
     device = make_device(tool_ref)
 
-    simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
-        friction=anatomy.friction
-    )
+    if os.environ.get("STEVE_EXPERIMENT_WALL_SIMULATED_FIXED", "").strip() == "1":
+        simulation = _SofaBeamAdapterSimulatedFixedWall(friction=anatomy.friction)
+    else:
+        simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
+            friction=anatomy.friction
+        )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,
