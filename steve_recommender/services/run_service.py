@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from steve_recommender.domain import EvaluationRunInfo, TrainingRunInfo
 
 
-def list_training_runs(root: Path | str = "results/paper_runs") -> List[TrainingRunInfo]:
+def list_training_runs(root: Union[Path, str] = "results/paper_runs") -> List[TrainingRunInfo]:
     base = Path(root)
     if not base.exists():
         return []
@@ -31,7 +31,7 @@ def list_training_runs(root: Path | str = "results/paper_runs") -> List[Training
     return runs
 
 
-def list_evaluation_runs(root: Path | str = "results/eval_runs") -> List[EvaluationRunInfo]:
+def list_evaluation_runs(root: Union[Path, str] = "results/eval_runs") -> List[EvaluationRunInfo]:
     base = Path(root)
     if not base.exists():
         return []

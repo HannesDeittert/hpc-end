@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 from steve_recommender.devices import make_device
 from steve_recommender.adapters import eve
+from steve_recommender.evaluation.config import ForceExtractionConfig
 
 
-def build_aortic_arch_intervention(*, tool_ref: str, anatomy) -> Tuple[object, float]:
+def build_aortic_arch_intervention(
+    *,
+    tool_ref: str,
+    anatomy,
+    force_extraction: Optional[ForceExtractionConfig] = None,
+) -> Tuple[object, float]:
     """Build a MonoPlaneStatic intervention for an aortic arch with a fixed endpoint."""
 
     arch_type = eve.intervention.vesseltree.ArchType(anatomy.arch_type)
@@ -22,6 +28,13 @@ def build_aortic_arch_intervention(*, tool_ref: str, anatomy) -> Tuple[object, f
     simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
         friction=anatomy.friction
     )
+    if force_extraction is not None and hasattr(simulation, "configure_wall_force_extraction"):
+        simulation.configure_wall_force_extraction(
+            mode=force_extraction.mode,
+            required=force_extraction.required,
+            contact_epsilon=force_extraction.contact_epsilon,
+            plugin_path=force_extraction.plugin_path,
+        )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,

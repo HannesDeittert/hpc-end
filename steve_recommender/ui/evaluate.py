@@ -34,6 +34,10 @@ from PyQt5.QtWidgets import (
 
 from steve_recommender.anatomy.aortic_arch_dataset import AorticArchRecord
 from steve_recommender.evaluation.config import AorticArchSpec
+from steve_recommender.evaluation.sofa_force_monitor import resolve_monitor_plugin_path
+from steve_recommender.evaluation.torch_checkpoint_compat import (
+    legacy_checkpoint_load_context,
+)
 from steve_recommender.rl.trained_agent_discovery import trained_checkpoints_by_tool
 from steve_recommender.services.comparison_service import (
     comparison_from_dict,
@@ -102,7 +106,8 @@ class _PlaybackWorker(QThread):
             )
 
             device = torch.device(self.device)
-            algo = eve_rl.algo.AlgoPlayOnly.from_checkpoint(self.checkpoint)
+            with legacy_checkpoint_load_context():
+                algo = eve_rl.algo.AlgoPlayOnly.from_checkpoint(self.checkpoint)
             algo.to(device)
 
             seed = self.base_seed
@@ -221,7 +226,7 @@ class EvaluateWidget(QWidget):
 
         self.policy_device = QComboBox()
         self.policy_device.addItems(["cuda", "cpu"])
-        self.use_non_mp = QCheckBox("Use non-mp SOFA (needed for force proxies)")
+        self.use_non_mp = QCheckBox("Use non-mp SOFA (required for wall-force extraction)")
         self.use_non_mp.setChecked(True)
         self.stochastic_eval = QCheckBox("Stochastic eval (non-deterministic)")
         self.stochastic_eval.setChecked(False)
@@ -232,6 +237,22 @@ class EvaluateWidget(QWidget):
         self.visualize_trials.setValue(1)
         self.visualize_trials.setEnabled(False)
         self.visualize_eval.toggled.connect(self.visualize_trials.setEnabled)
+
+        self.force_mode = QComboBox()
+        self.force_mode.addItems(["passive", "intrusive_lcp"])
+        self.force_required = QCheckBox("Force extraction required (fail fast)")
+        self.force_required.setChecked(False)
+        self.force_contact_epsilon = QDoubleSpinBox()
+        self.force_contact_epsilon.setRange(0.0, 1.0)
+        self.force_contact_epsilon.setDecimals(8)
+        self.force_contact_epsilon.setSingleStep(1e-7)
+        self.force_contact_epsilon.setValue(1e-7)
+        self.force_plugin_path = QLineEdit()
+        self.force_plugin_path.setPlaceholderText(
+            "Optional path to libSofaWireForceMonitor.so (else STEVE_WALL_FORCE_MONITOR_PLUGIN / auto)"
+        )
+        self.btn_force_plugin_browse = QPushButton("Browse")
+        self.btn_force_plugin_browse.clicked.connect(self._browse_force_plugin)
 
         self.target_branches = QLineEdit("lcca")
         self.target_threshold = QDoubleSpinBox()
@@ -317,6 +338,13 @@ class EvaluateWidget(QWidget):
         form.addRow("", self.stochastic_eval)
         form.addRow("", self.visualize_eval)
         form.addRow("Visible trials / agent", self.visualize_trials)
+        form.addRow("Force mode", self.force_mode)
+        form.addRow("", self.force_required)
+        form.addRow("Force contact epsilon", self.force_contact_epsilon)
+        force_plugin_row = QHBoxLayout()
+        force_plugin_row.addWidget(self.force_plugin_path, 1)
+        force_plugin_row.addWidget(self.btn_force_plugin_browse)
+        form.addRow("Force plugin", force_plugin_row)
         form.addRow("Target branches (comma)", self.target_branches)
         form.addRow("Target threshold (mm)", self.target_threshold)
 
@@ -535,6 +563,17 @@ class EvaluateWidget(QWidget):
         self._resolve_row_preview(row)
         self._update_run_enabled()
 
+    def _browse_force_plugin(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select wall-force monitor plugin",
+            str(Path.cwd()),
+            "Shared libraries (*.so *.dylib *.dll);;All files (*)",
+        )
+        if not path:
+            return
+        self.force_plugin_path.setText(path)
+
     def _collect_candidates(self) -> List[Dict[str, str]]:
         candidates: List[Dict[str, str]] = []
         for row in range(self.agent_table.rowCount()):
@@ -639,6 +678,14 @@ class EvaluateWidget(QWidget):
             "visualize": bool(self.visualize_eval.isChecked()),
             "visualize_trials_per_agent": int(self.visualize_trials.value()),
             "output_root": "results/eval_runs",
+            "force_extraction": {
+                "mode": self.force_mode.currentText(),
+                "required": bool(self.force_required.isChecked()),
+                "contact_epsilon": float(self.force_contact_epsilon.value()),
+                "plugin_path": (
+                    self.force_plugin_path.text().strip() or None
+                ),
+            },
             "anatomy": anatomy,
             "scoring": {
                 "mode": "default_v1",
@@ -689,6 +736,23 @@ class EvaluateWidget(QWidget):
             + "\n".join(
                 f"  - {c.name} | tool={c.tool} | checkpoint={c.checkpoint} | source={c.source}"
                 for c in resolved
+            )
+        )
+        force_cfg = cfg.get("force_extraction", {})
+        plugin_path = force_cfg.get("plugin_path")
+        resolved_plugin = resolve_monitor_plugin_path(plugin_path)
+        if plugin_path:
+            plugin_state = "present" if Path(plugin_path).exists() else "missing"
+        else:
+            plugin_state = "resolved" if resolved_plugin is not None else "missing"
+        self.log.append(
+            "[ui] force extraction: mode={mode} required={required} epsilon={eps} plugin={plugin} ({state}) resolved={resolved}".format(
+                mode=force_cfg.get("mode", "passive"),
+                required=int(bool(force_cfg.get("required", False))),
+                eps=force_cfg.get("contact_epsilon", 1e-7),
+                plugin=plugin_path or "(auto)",
+                state=plugin_state,
+                resolved=str(resolved_plugin) if resolved_plugin is not None else "(none)",
             )
         )
 
@@ -755,6 +819,10 @@ class EvaluateWidget(QWidget):
             overrides["LD_LIBRARY_PATH"] = old_ld
         else:
             overrides["LD_LIBRARY_PATH"] = f"{conda_lib}:{old_ld}" if old_ld else conda_lib
+
+        plugin_path = self.force_plugin_path.text().strip()
+        if plugin_path:
+            overrides["STEVE_WALL_FORCE_MONITOR_PLUGIN"] = plugin_path
 
         return overrides
 

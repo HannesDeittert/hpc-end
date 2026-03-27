@@ -270,7 +270,10 @@ def _to_evaluation_config(
         stochastic_eval=cfg.stochastic_eval,
         visualize=cfg.visualize,
         visualize_trials_per_agent=cfg.visualize_trials_per_agent,
+        visualize_force_debug=cfg.visualize_force_debug,
+        visualize_force_debug_top_k=cfg.visualize_force_debug_top_k,
         scoring=cfg.scoring,
+        force_extraction=cfg.force_extraction,
     )
 
 

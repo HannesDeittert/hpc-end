@@ -19,6 +19,11 @@ stochastic_eval: false
 visualize: false
 visualize_trials_per_agent: 1
 
+force_extraction:
+  mode: passive
+  required: false
+  contact_epsilon: 1.0e-7
+
 output_root: results/eval_runs
 
 anatomy:
@@ -28,4 +33,3 @@ anatomy:
   target_mode: branch_end
   target_branches: ["lcca"]
   target_threshold_mm: 5.0
-

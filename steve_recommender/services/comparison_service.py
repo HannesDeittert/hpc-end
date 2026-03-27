@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Union
 from typing import Any, Dict, List
 
 from steve_recommender.comparison import (
@@ -15,7 +16,7 @@ from steve_recommender.comparison import (
 )
 
 
-def load_comparison(path: str | Path) -> ComparisonConfig:
+def load_comparison(path: Union[str, Path]) -> ComparisonConfig:
     return load_comparison_config(path)
 
 

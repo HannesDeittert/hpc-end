@@ -18,7 +18,10 @@ For each configured agent (checkpoint + tool), the pipeline runs **N trials** wi
 - wall-clock time
 - per-step **tip kinematics** (position + derived velocity)
 - per-step **actions / rewards / terminal / truncation**
-- *best-effort* **wall/contact force** scalars from SOFA (see notes below)
+- per-step **wall-contact force telemetry**:
+  - per-contact force vectors
+  - per-wire-segment force vectors (full wire)
+  - total wire-wall force vector/norm
 
 ### Deterministic vs stochastic behavior
 
@@ -82,6 +85,13 @@ steve-compare --config docs/compare_example.yml --visualize --visualize-trials-p
 steve-eval --config docs/eval_example.yml --visualize --visualize-trials-per-agent 1
 ```
 
+Override force extraction mode from CLI:
+
+```bash
+steve-compare --config docs/compare_example.yml --force-mode passive --force-required
+steve-eval --config docs/eval_example.yml --force-mode intrusive_lcp --force-optional
+```
+
 Outputs are written to `results/eval_runs/<timestamp>_<name>/`.
 
 ## Config format
@@ -98,6 +108,7 @@ Top-level keys:
 - `stochastic_eval`: policy sampling during eval (default: `false`, deterministic)
 - `visualize`: show Sofa window during eval
 - `visualize_trials_per_agent`: render only first N trials per agent
+- `force_extraction`: wall-force extraction settings (mode + availability policy)
 - `output_root`: output directory root
 - `anatomy`: currently only `type: aortic_arch` is supported
 
@@ -110,6 +121,12 @@ Anatomy (`aortic_arch`) keys:
 - `image_frequency_hz`: affects `dt` and velocity scaling
 - `image_rot_zx_deg`: `[rot_z_deg, rot_x_deg]` for the virtual C-arm
 - `friction`: SOFA friction coefficient
+
+Force extraction keys:
+- `mode`: `"passive"` (preferred) or `"intrusive_lcp"` (explicit fallback)
+- `required`: fail run if force telemetry is unavailable/inconsistent
+- `contact_epsilon`: threshold used by consistency checks
+- `plugin_path`: optional explicit path to `libSofaWireForceMonitor.so`
 
 ## Output format
 
@@ -130,7 +147,10 @@ Semicolon-delimited, one row per trial. Important columns:
 - `episode_reward`: total reward
 - `wall_time_s`: wall-clock runtime for the episode
 - `sim_time_s`: simulated time (`steps_total * dt`)
-- `*_force_*`: aggregate force stats (see below)
+- `wall_total_force_norm_*`: aggregate full-wire force norms
+- `wall_contact_count_max`: max contact count over the trial
+- `wall_force_available`: `0/1` telemetry availability
+- `wall_force_source`, `wall_force_error`: provenance / diagnostics
 - `score`: computed scalar score for this trial
 - `score_*`: score components (success/efficiency/safety/smoothness)
 
@@ -146,20 +166,33 @@ Keys (subset):
 - `actions`: `(T, A)` actions executed (A depends on env)
 - `rewards`: `(T,)`
 - `terminals`, `truncations`: `(T,)` bool
-- `wall_*`: per-step wall/contact scalars
+- `wall_contact_force_vectors`: `(T, N_i, 3)` per-step contact vectors (object array if variable `N_i`)
+- `wall_contact_segment_indices`: `(T, N_i)` mapped segment indices
+- `wall_segment_force_vectors`: `(T, S, 3)` per-step full-wire segment vectors
+- `wall_total_force_vector`: `(T,3)` per-step summed wire-wall vector
+- `wall_total_force_norm`: `(T,)` norm of total force
+- `wall_force_available`, `wall_contact_count`
 - `action_dt_s`: scalar `dt` used for velocity
 
-## Wall forces (SOFA)
+## Wall Forces (SOFA)
 
-The pipeline records **approximate scalars**, not a full contact model:
-- `wall_lcp_sum_abs` / `wall_lcp_max_abs`: magnitudes from SOFA's LCP constraint solver
-- `wall_wire_force_norm`: norm of the wire DOF forces
-- `wall_collision_force_norm`: norm of the collision DOF forces
+Modes:
+- `passive` (preferred): uses `WireWallForceMonitor` plugin and does not toggle LCP build mode.
+- `intrusive_lcp`: explicit fallback mode; enables LCP force telemetry and may affect trajectories.
 
-Important limitations:
-- These require `use_non_mp_sim: true` (SOFA scene accessible in Python).
-- Depending on the scene setup and whether contact is active, values can be `0` or `NaN`.
-- Treat them as *debug / relative comparison* signals first, not absolute validated forces.
+Implementation note:
+- passive mode is attached dynamically at runtime from the recommender package; no stEVE source patch is required.
+
+Safety behavior:
+- `required: true` -> fail fast if telemetry is missing/inconsistent.
+- `required: false` -> mark force unavailable; safety term is excluded from score (weights renormalized).
+
+Requirements:
+- `use_non_mp_sim: true`
+- plugin built and discoverable for passive mode:
+  - install build deps once (Ubuntu): `sudo apt install libboost-all-dev cmake build-essential`
+  - run `scripts/build_wall_force_monitor.sh`
+  - export `STEVE_WALL_FORCE_MONITOR_PLUGIN=/.../libSofaWireForceMonitor.so`
 
 ## Scoring (per trial + per agent)
 
@@ -170,6 +203,9 @@ By default (`mode: default_v1`) the score combines:
 - `efficiency` (how quickly the target is reached)
 - `safety` (penalty for large contact/wall force scalars)
 - `smoothness` (penalty for high peak tip speed)
+
+If force telemetry is unavailable and `force_extraction.required: false`, the
+`safety` term is removed and the remaining weights are renormalized.
 
 The default score is intended for **relative comparisons**. Because force units can depend on scene/unit conventions, the force scales are configurable.
 

@@ -85,8 +85,20 @@ info = eve.info.Combination([..., MyCollector(intervention)])
 
 If you need access to SOFA internals, enable:
 
-```
+```yaml
 use_non_mp_sim: true
+force_extraction:
+  mode: passive
+  required: true
 ```
 
-in the evaluation config so the scene graph is accessible from Python.
+Build and export the native monitor plugin before running:
+
+```bash
+# Ubuntu: sudo apt install libboost-all-dev cmake build-essential
+scripts/build_wall_force_monitor.sh
+export STEVE_WALL_FORCE_MONITOR_PLUGIN=/.../libSofaWireForceMonitor.so
+```
+
+The monitor is injected by the recommender runtime (collector side), so
+upstream `third_party/stEVE` sources remain unchanged.

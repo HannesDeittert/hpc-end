@@ -11,7 +11,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from steve_recommender.services.comparison_service import (
     comparison_from_dict,
@@ -97,7 +97,7 @@ def _load_manifest(path: Path) -> Dict[str, Any]:
     return data
 
 
-def _parse_seeds(raw: str | None, n_trials: int, base_seed: int) -> List[int]:
+def _parse_seeds(raw: Optional[str], n_trials: int, base_seed: int) -> List[int]:
     if raw:
         seeds = [int(s.strip()) for s in raw.split(",") if s.strip()]
         if not seeds:

@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
-from steve_recommender.evaluation.config import AorticArchSpec, ScoringConfig
+from steve_recommender.evaluation.config import (
+    AorticArchSpec,
+    ForceCalibrationConfig,
+    ForceExtractionConfig,
+    ForceUnitsConfig,
+    ScoringConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -53,7 +59,10 @@ class ComparisonConfig:
     stochastic_eval: bool = False
     visualize: bool = False
     visualize_trials_per_agent: int = 1
+    visualize_force_debug: bool = False
+    visualize_force_debug_top_k: int = 5
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
+    force_extraction: ForceExtractionConfig = field(default_factory=ForceExtractionConfig)
 
 
 def _require(mapping: Dict[str, Any], key: str) -> Any:
@@ -105,6 +114,88 @@ def _to_scoring_config(raw: Optional[Dict[str, Any]]) -> ScoringConfig:
     )
 
 
+def _to_force_extraction_config(raw: Optional[Dict[str, Any]]) -> ForceExtractionConfig:
+    if raw is None:
+        return ForceExtractionConfig()
+    if not isinstance(raw, dict):
+        raise TypeError(f"force_extraction must be a mapping, got {type(raw)}")
+
+    mode = str(raw.get("mode", "passive"))
+    if mode not in {"passive", "intrusive_lcp", "constraint_projected_si_validated"}:
+        raise ValueError(
+            f"Unsupported force_extraction.mode: {mode} "
+            "(expected 'passive', 'intrusive_lcp' or 'constraint_projected_si_validated')"
+        )
+
+    contact_epsilon = float(raw.get("contact_epsilon", 1e-7))
+    if contact_epsilon < 0.0:
+        raise ValueError("force_extraction.contact_epsilon must be >= 0")
+
+    plugin_path = raw.get("plugin_path")
+    if plugin_path is not None and not isinstance(plugin_path, str):
+        raise TypeError(
+            f"force_extraction.plugin_path must be a string or null, got {type(plugin_path)}"
+        )
+
+    units_raw = raw.get("units")
+    units: Optional[ForceUnitsConfig] = None
+    if units_raw is not None:
+        if not isinstance(units_raw, dict):
+            raise TypeError(f"force_extraction.units must be a mapping, got {type(units_raw)}")
+        missing = [k for k in ("length_unit", "mass_unit", "time_unit") if k not in units_raw]
+        if missing:
+            raise ValueError(
+                "force_extraction.units must explicitly define "
+                "length_unit, mass_unit and time_unit (missing: "
+                + ", ".join(missing)
+                + ")"
+            )
+        length_unit = str(units_raw["length_unit"])
+        mass_unit = str(units_raw["mass_unit"])
+        time_unit = str(units_raw["time_unit"])
+        if length_unit not in {"mm", "m"}:
+            raise ValueError("force_extraction.units.length_unit must be 'mm' or 'm'")
+        if mass_unit not in {"kg", "g"}:
+            raise ValueError("force_extraction.units.mass_unit must be 'kg' or 'g'")
+        if time_unit not in {"s", "ms"}:
+            raise ValueError("force_extraction.units.time_unit must be 's' or 'ms'")
+        units = ForceUnitsConfig(
+            length_unit=length_unit,
+            mass_unit=mass_unit,
+            time_unit=time_unit,
+        )
+
+    calibration_raw = raw.get("calibration")
+    if calibration_raw is None:
+        calibration = ForceCalibrationConfig()
+    else:
+        if not isinstance(calibration_raw, dict):
+            raise TypeError(
+                f"force_extraction.calibration must be a mapping, got {type(calibration_raw)}"
+            )
+        calibration = ForceCalibrationConfig(
+            required=bool(calibration_raw.get("required", True)),
+            cache_path=str(
+                calibration_raw.get("cache_path", "results/force_calibration/cache.json")
+            ),
+            tolerance_profile=str(calibration_raw.get("tolerance_profile", "default_v1")),
+        )
+
+    cfg = ForceExtractionConfig(
+        mode=mode,
+        required=bool(raw.get("required", False)),
+        contact_epsilon=contact_epsilon,
+        plugin_path=plugin_path,
+        units=units,
+        calibration=calibration,
+    )
+    if cfg.mode == "constraint_projected_si_validated" and cfg.units is None:
+        raise ValueError(
+            "force_extraction.units is required when mode='constraint_projected_si_validated'"
+        )
+    return cfg
+
+
 def _to_candidates(raw_candidates: Any) -> List[ComparisonCandidateSpec]:
     if not isinstance(raw_candidates, list):
         raise TypeError(f"candidates must be a list, got {type(raw_candidates)}")
@@ -143,6 +234,7 @@ def comparison_config_from_dict(raw: Dict[str, Any]) -> ComparisonConfig:
     candidates = _to_candidates(_require(raw, "candidates"))
     anatomy = _to_anatomy_spec(raw.get("anatomy", {}))
     scoring = _to_scoring_config(raw.get("scoring"))
+    force_extraction = _to_force_extraction_config(raw.get("force_extraction"))
 
     seeds_raw = raw.get("seeds")
     seeds: Optional[List[int]]
@@ -155,6 +247,10 @@ def comparison_config_from_dict(raw: Dict[str, Any]) -> ComparisonConfig:
         seeds = [int(s) for s in parsed]
     else:
         raise TypeError(f"seeds must be list[str/int], comma-string or null, got {type(seeds_raw)}")
+
+    visualize_force_debug_top_k = int(raw.get("visualize_force_debug_top_k", 5))
+    if visualize_force_debug_top_k < 1:
+        raise ValueError("visualize_force_debug_top_k must be >= 1")
 
     return ComparisonConfig(
         name=str(_require(raw, "name")),
@@ -170,11 +266,14 @@ def comparison_config_from_dict(raw: Dict[str, Any]) -> ComparisonConfig:
         stochastic_eval=bool(raw.get("stochastic_eval", False)),
         visualize=bool(raw.get("visualize", False)),
         visualize_trials_per_agent=int(raw.get("visualize_trials_per_agent", 1)),
+        visualize_force_debug=bool(raw.get("visualize_force_debug", False)),
+        visualize_force_debug_top_k=visualize_force_debug_top_k,
         scoring=scoring,
+        force_extraction=force_extraction,
     )
 
 
-def load_comparison_config(path: str | Path) -> ComparisonConfig:
+def load_comparison_config(path: Union[str, Path]) -> ComparisonConfig:
     path = Path(path)
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}

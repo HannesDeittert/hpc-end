@@ -70,6 +70,15 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         _jshaped_default_kwargs(),
         "Original ArchVar J-shaped guidewire.",
     ),
+    "jshaped_default_tipradius_min": ToolSpec(
+        eve.intervention.device.JShaped,
+        {
+            **_jshaped_default_kwargs(),
+            # Keep everything identical to jshaped_default, except a minimal bend radius.
+            "tip_radius": 0.1,
+        },
+        "ArchVar default J-shaped guidewire with minimal tip radius (0.1mm).",
+    ),
     "jshaped_longtip_40mm": ToolSpec(
         eve.intervention.device.JShaped,
         {
