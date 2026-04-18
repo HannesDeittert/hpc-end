@@ -80,6 +80,9 @@ Repo-local evaluation pipeline to benchmark **multiple trained agents** (each wi
 
 - Docs: `docs/evaluation_pipeline.md`
 - CLI: `steve-eval --config docs/eval_example.yml`
+- Comparison CLI (registry-aware): `steve-compare --config docs/compare_example.yml`
+- List available registry refs: `steve-compare --list-agent-refs`
+- CLI Sofa window flag: add `--visualize` (optionally `--visualize-trials-per-agent N`)
 - Outputs: `results/eval_runs/<timestamp>_<name>/summary.csv` + `trials/*.npz`
 
 ---

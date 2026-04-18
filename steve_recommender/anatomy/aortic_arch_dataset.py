@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -92,7 +92,7 @@ def default_aortic_arch_dataset_root() -> Path:
     return repo_root() / "results" / "anatomies" / "aortic_arch"
 
 
-def load_aortic_arch_dataset(root: Optional[str | Path] = None) -> AorticArchDataset:
+def load_aortic_arch_dataset(root: Optional[Union[str, Path]] = None) -> AorticArchDataset:
     root_path = Path(root) if root is not None else default_aortic_arch_dataset_root()
     return AorticArchDataset(root=root_path)
 

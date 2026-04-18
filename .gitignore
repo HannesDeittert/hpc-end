@@ -63,3 +63,8 @@ htmlcov/
 .python-version
 .direnv/
 .DS_Store
+
+# Heavy training checkpoints
+data/**/agents/**/*.everl
+data/**/agents/**/best_checkpoint.everl
+.codex

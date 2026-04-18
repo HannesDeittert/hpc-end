@@ -27,7 +27,7 @@ def register_agent(
     agent_name: Optional[str] = None,
     run_dir: Optional[Path] = None,
 ) -> Path:
-    """Create/update an agent registry entry under data/<model>/wires/<wire>/agents/."""
+    """Create/update an agent registry entry under canonical wire registry paths."""
 
     model, wire = parse_wire_ref(tool_ref)
     if not model:

@@ -1,0 +1,73 @@
+# Example comparison config.
+# Run with:
+#   steve-compare --config docs/compare_example.yml
+#
+# This config demonstrates both candidate modes:
+# - registry-driven (agent_ref)
+# - explicit (tool + checkpoint)
+
+name: compare_standardj_demo
+
+candidates:
+  - name: standardj_best_from_registry
+    # model/wire:agent
+    agent_ref: TestModel_StandardJ035/StandardJ035_PTFE:quick_smoke
+    # optional override; if set, this path wins over registry fallback
+    # checkpoint_override: /absolute/path/to/checkpoint123456.everl
+
+  - name: standardj_explicit
+    tool: TestModel_StandardJ035/StandardJ035_PTFE
+    checkpoint: results/paper_runs/2026-01-17_132800_quick_smoke/checkpoints/best_checkpoint.everl
+
+# Either n_trials + base_seed ...
+n_trials: 5
+base_seed: 123
+# ... or an explicit seed list:
+# seeds: [123, 127, 175]
+
+max_episode_steps: 1000
+policy_device: cuda
+use_non_mp_sim: true
+stochastic_eval: false
+visualize: false
+visualize_trials_per_agent: 1
+
+force_extraction:
+  # passive | intrusive_lcp | constraint_projected_si_validated
+  mode: passive
+  required: false
+  # plugin_path: /absolute/path/to/libSofaWireForceMonitor.so
+  contact_epsilon: 1.0e-7
+  # required only for validated mode:
+  # units:
+  #   length_unit: mm
+  #   mass_unit: kg
+  #   time_unit: s
+  calibration:
+    required: true
+    cache_path: results/force_calibration/cache.json
+    tolerance_profile: default_v1
+
+scoring:
+  mode: default_v1
+  w_success: 2.0
+  w_efficiency: 1.0
+  w_safety: 1.0
+  w_smoothness: 0.25
+  normalize_weights: true
+  force_scale: 1.0
+  lcp_scale: 1.0
+  speed_scale_mm_s: 50.0
+
+output_root: results/eval_runs
+
+anatomy:
+  type: aortic_arch
+  arch_type: I
+  seed: 30
+  target_mode: branch_end
+  target_branches: ["lcca"]
+  target_threshold_mm: 5.0
+  image_frequency_hz: 7.5
+  image_rot_zx_deg: [20.0, 5.0]
+  friction: 0.001

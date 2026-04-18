@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Union
 from typing import Any, Dict
 
 from steve_recommender.evaluation.config import EvaluationConfig, config_from_dict, load_config
 from steve_recommender.evaluation.pipeline import run_evaluation as _run_evaluation
 
 
-def load_evaluation_config(path: str | Path) -> EvaluationConfig:
+def load_evaluation_config(path: Union[str, Path]) -> EvaluationConfig:
     return load_config(path)
 
 

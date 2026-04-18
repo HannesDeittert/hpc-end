@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 import yaml
 
@@ -69,6 +69,36 @@ class ScoringConfig:
 
 
 @dataclass(frozen=True)
+class ForceExtractionConfig:
+    """How wall-contact force telemetry is extracted from SOFA."""
+
+    mode: Literal["passive", "intrusive_lcp", "constraint_projected_si_validated"] = "passive"
+    required: bool = False
+    contact_epsilon: float = 1e-7
+    plugin_path: Optional[str] = None
+    units: Optional["ForceUnitsConfig"] = None
+    calibration: "ForceCalibrationConfig" = field(default_factory=lambda: ForceCalibrationConfig())
+
+
+@dataclass(frozen=True)
+class ForceUnitsConfig:
+    """Explicit unit metadata for validated SI conversion."""
+
+    length_unit: Literal["mm", "m"] = "mm"
+    mass_unit: Literal["kg", "g"] = "kg"
+    time_unit: Literal["s", "ms"] = "s"
+
+
+@dataclass(frozen=True)
+class ForceCalibrationConfig:
+    """Calibration-cache policy for validated force mode."""
+
+    required: bool = True
+    cache_path: str = "results/force_calibration/cache.json"
+    tolerance_profile: str = "default_v1"
+
+
+@dataclass(frozen=True)
 class EvaluationConfig:
     """Top-level evaluation configuration.
 
@@ -85,6 +115,7 @@ class EvaluationConfig:
     # How many evaluation trials per agent.
     n_trials: int = 10
     base_seed: int = 123
+    seeds: Optional[List[int]] = None
 
     # Environment settings.
     max_episode_steps: int = 1000
@@ -99,9 +130,15 @@ class EvaluationConfig:
     # If False, SOFA will run in a separate process (faster/safer) but forces are
     # not accessible with the current upstream API.
     use_non_mp_sim: bool = True
+    stochastic_eval: bool = False
+    visualize: bool = False
+    visualize_trials_per_agent: int = 1
+    visualize_force_debug: bool = False
+    visualize_force_debug_top_k: int = 5
 
     # Optional scoring configuration for post-processing.
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
+    force_extraction: ForceExtractionConfig = field(default_factory=ForceExtractionConfig)
 
 
 def _require(mapping: Dict[str, Any], key: str) -> Any:
@@ -170,12 +207,111 @@ def _to_scoring_config(raw: Optional[Dict[str, Any]]) -> ScoringConfig:
     )
 
 
+def _to_force_extraction_config(raw: Optional[Dict[str, Any]]) -> ForceExtractionConfig:
+    if raw is None:
+        return ForceExtractionConfig()
+    if not isinstance(raw, dict):
+        raise TypeError(f"force_extraction must be a mapping, got {type(raw)}")
+
+    mode = str(raw.get("mode", "passive"))
+    if mode not in {"passive", "intrusive_lcp", "constraint_projected_si_validated"}:
+        raise ValueError(
+            f"Unsupported force_extraction.mode: {mode} "
+            "(expected 'passive', 'intrusive_lcp' or 'constraint_projected_si_validated')"
+        )
+
+    contact_epsilon = float(raw.get("contact_epsilon", 1e-7))
+    if contact_epsilon < 0.0:
+        raise ValueError("force_extraction.contact_epsilon must be >= 0")
+
+    plugin_path = raw.get("plugin_path")
+    if plugin_path is not None and not isinstance(plugin_path, str):
+        raise TypeError(
+            f"force_extraction.plugin_path must be a string or null, got {type(plugin_path)}"
+        )
+
+    units_raw = raw.get("units")
+    units: Optional[ForceUnitsConfig] = None
+    if units_raw is not None:
+        if not isinstance(units_raw, dict):
+            raise TypeError(f"force_extraction.units must be a mapping, got {type(units_raw)}")
+        missing = [k for k in ("length_unit", "mass_unit", "time_unit") if k not in units_raw]
+        if missing:
+            raise ValueError(
+                "force_extraction.units must explicitly define "
+                "length_unit, mass_unit and time_unit (missing: "
+                + ", ".join(missing)
+                + ")"
+            )
+        length_unit = str(units_raw["length_unit"])
+        mass_unit = str(units_raw["mass_unit"])
+        time_unit = str(units_raw["time_unit"])
+        if length_unit not in {"mm", "m"}:
+            raise ValueError("force_extraction.units.length_unit must be 'mm' or 'm'")
+        if mass_unit not in {"kg", "g"}:
+            raise ValueError("force_extraction.units.mass_unit must be 'kg' or 'g'")
+        if time_unit not in {"s", "ms"}:
+            raise ValueError("force_extraction.units.time_unit must be 's' or 'ms'")
+        units = ForceUnitsConfig(
+            length_unit=length_unit,
+            mass_unit=mass_unit,
+            time_unit=time_unit,
+        )
+
+    calibration_raw = raw.get("calibration")
+    if calibration_raw is None:
+        calibration = ForceCalibrationConfig()
+    else:
+        if not isinstance(calibration_raw, dict):
+            raise TypeError(
+                f"force_extraction.calibration must be a mapping, got {type(calibration_raw)}"
+            )
+        cache_path = str(calibration_raw.get("cache_path", "results/force_calibration/cache.json"))
+        tolerance_profile = str(calibration_raw.get("tolerance_profile", "default_v1"))
+        calibration = ForceCalibrationConfig(
+            required=bool(calibration_raw.get("required", True)),
+            cache_path=cache_path,
+            tolerance_profile=tolerance_profile,
+        )
+
+    if mode == "constraint_projected_si_validated" and units is None:
+        raise ValueError(
+            "force_extraction.units is required when mode='constraint_projected_si_validated'"
+        )
+
+    return ForceExtractionConfig(
+        mode=mode,
+        required=bool(raw.get("required", False)),
+        contact_epsilon=contact_epsilon,
+        plugin_path=plugin_path,
+        units=units,
+        calibration=calibration,
+    )
+
+
 def config_from_dict(raw: Dict[str, Any]) -> EvaluationConfig:
     """Convert a plain dict (YAML/JSON/UI) into a validated EvaluationConfig."""
 
     agents = _to_agent_specs(_require(raw, "agents"))
     anatomy = _to_anatomy_spec(raw.get("anatomy", {}))
     scoring = _to_scoring_config(raw.get("scoring"))
+    force_extraction = _to_force_extraction_config(raw.get("force_extraction"))
+
+    seeds_raw = raw.get("seeds")
+    seeds: Optional[List[int]]
+    if seeds_raw is None:
+        seeds = None
+    elif isinstance(seeds_raw, list):
+        seeds = [int(s) for s in seeds_raw]
+    elif isinstance(seeds_raw, str):
+        parts = [p.strip() for p in seeds_raw.split(",") if p.strip()]
+        seeds = [int(p) for p in parts]
+    else:
+        raise TypeError(f"seeds must be list[str/int], comma-string or null, got {type(seeds_raw)}")
+
+    visualize_force_debug_top_k = int(raw.get("visualize_force_debug_top_k", 5))
+    if visualize_force_debug_top_k < 1:
+        raise ValueError("visualize_force_debug_top_k must be >= 1")
 
     return EvaluationConfig(
         name=str(_require(raw, "name")),
@@ -183,15 +319,22 @@ def config_from_dict(raw: Dict[str, Any]) -> EvaluationConfig:
         anatomy=anatomy,
         n_trials=int(raw.get("n_trials", 10)),
         base_seed=int(raw.get("base_seed", 123)),
+        seeds=seeds,
         max_episode_steps=int(raw.get("max_episode_steps", 1000)),
         output_root=str(raw.get("output_root", "results/eval_runs")),
         policy_device=str(raw.get("policy_device", "cuda")),
         use_non_mp_sim=bool(raw.get("use_non_mp_sim", True)),
+        stochastic_eval=bool(raw.get("stochastic_eval", False)),
+        visualize=bool(raw.get("visualize", False)),
+        visualize_trials_per_agent=int(raw.get("visualize_trials_per_agent", 1)),
+        visualize_force_debug=bool(raw.get("visualize_force_debug", False)),
+        visualize_force_debug_top_k=visualize_force_debug_top_k,
         scoring=scoring,
+        force_extraction=force_extraction,
     )
 
 
-def load_config(path: str | Path) -> EvaluationConfig:
+def load_config(path: Union[str, Path]) -> EvaluationConfig:
     """Load an evaluation config from YAML (recommended) or JSON-like YAML."""
 
     path = Path(path)

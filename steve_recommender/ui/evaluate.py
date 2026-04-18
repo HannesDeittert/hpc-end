@@ -34,7 +34,16 @@ from PyQt5.QtWidgets import (
 
 from steve_recommender.anatomy.aortic_arch_dataset import AorticArchRecord
 from steve_recommender.evaluation.config import AorticArchSpec
+from steve_recommender.evaluation.sofa_force_monitor import resolve_monitor_plugin_path
+from steve_recommender.evaluation.torch_checkpoint_compat import (
+    legacy_checkpoint_load_context,
+)
 from steve_recommender.rl.trained_agent_discovery import trained_checkpoints_by_tool
+from steve_recommender.services.comparison_service import (
+    comparison_from_dict,
+    resolve_candidates as resolve_comparison_candidates,
+)
+from steve_recommender.services.library_service import list_agent_refs
 from steve_recommender.storage import list_models, list_wires
 from steve_recommender.ui.components.anatomy_select_dialog import AnatomySelectionDialog
 
@@ -97,7 +106,8 @@ class _PlaybackWorker(QThread):
             )
 
             device = torch.device(self.device)
-            algo = eve_rl.algo.AlgoPlayOnly.from_checkpoint(self.checkpoint)
+            with legacy_checkpoint_load_context():
+                algo = eve_rl.algo.AlgoPlayOnly.from_checkpoint(self.checkpoint)
             algo.to(device)
 
             seed = self.base_seed
@@ -159,6 +169,7 @@ class EvaluateWidget(QWidget):
         self._selected_anatomy: Optional[AorticArchRecord] = None
         self._selected_centerline_npz: Optional[Path] = None
         self._trained_by_tool = trained_checkpoints_by_tool()
+        self._agent_refs = list_agent_refs()
 
         # --- Anatomy selection ---
         self.btn_select_anatomy = QPushButton("Select Anatomy…")
@@ -170,15 +181,28 @@ class EvaluateWidget(QWidget):
         self.preview.setMinimumHeight(250)
 
         # --- Agent table ---
-        self.agent_table = QTableWidget(0, 4)
-        self.agent_table.setHorizontalHeaderLabels(["Agent name", "Tool", "Checkpoint (.everl)", ""])
+        self.agent_table = QTableWidget(0, 7)
+        self.agent_table.setHorizontalHeaderLabels(
+            [
+                "Agent name",
+                "Agent ref (optional)",
+                "Tool",
+                "Checkpoint (.everl / optional)",
+                "Resolved checkpoint",
+                "Source",
+                "",
+            ]
+        )
         self.agent_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         header = self.agent_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        self.agent_table.setColumnWidth(3, 80)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.agent_table.setColumnWidth(6, 80)
 
         self.btn_add_agent = QPushButton("Add agent")
         self.btn_add_agent.clicked.connect(self._add_agent_row)
@@ -202,8 +226,33 @@ class EvaluateWidget(QWidget):
 
         self.policy_device = QComboBox()
         self.policy_device.addItems(["cuda", "cpu"])
-        self.use_non_mp = QCheckBox("Use non-mp SOFA (needed for force proxies)")
+        self.use_non_mp = QCheckBox("Use non-mp SOFA (required for wall-force extraction)")
         self.use_non_mp.setChecked(True)
+        self.stochastic_eval = QCheckBox("Stochastic eval (non-deterministic)")
+        self.stochastic_eval.setChecked(False)
+        self.visualize_eval = QCheckBox("Visualize evaluation runs (Sofa window)")
+        self.visualize_eval.setChecked(False)
+        self.visualize_trials = QSpinBox()
+        self.visualize_trials.setRange(1, 100000)
+        self.visualize_trials.setValue(1)
+        self.visualize_trials.setEnabled(False)
+        self.visualize_eval.toggled.connect(self.visualize_trials.setEnabled)
+
+        self.force_mode = QComboBox()
+        self.force_mode.addItems(["passive", "intrusive_lcp"])
+        self.force_required = QCheckBox("Force extraction required (fail fast)")
+        self.force_required.setChecked(False)
+        self.force_contact_epsilon = QDoubleSpinBox()
+        self.force_contact_epsilon.setRange(0.0, 1.0)
+        self.force_contact_epsilon.setDecimals(8)
+        self.force_contact_epsilon.setSingleStep(1e-7)
+        self.force_contact_epsilon.setValue(1e-7)
+        self.force_plugin_path = QLineEdit()
+        self.force_plugin_path.setPlaceholderText(
+            "Optional path to libSofaWireForceMonitor.so (else STEVE_WALL_FORCE_MONITOR_PLUGIN / auto)"
+        )
+        self.btn_force_plugin_browse = QPushButton("Browse")
+        self.btn_force_plugin_browse.clicked.connect(self._browse_force_plugin)
 
         self.target_branches = QLineEdit("lcca")
         self.target_threshold = QDoubleSpinBox()
@@ -286,6 +335,16 @@ class EvaluateWidget(QWidget):
         form.addRow("Max episode steps", self.max_steps)
         form.addRow("Policy device", self.policy_device)
         form.addRow("", self.use_non_mp)
+        form.addRow("", self.stochastic_eval)
+        form.addRow("", self.visualize_eval)
+        form.addRow("Visible trials / agent", self.visualize_trials)
+        form.addRow("Force mode", self.force_mode)
+        form.addRow("", self.force_required)
+        form.addRow("Force contact epsilon", self.force_contact_epsilon)
+        force_plugin_row = QHBoxLayout()
+        force_plugin_row.addWidget(self.force_plugin_path, 1)
+        force_plugin_row.addWidget(self.btn_force_plugin_browse)
+        form.addRow("Force plugin", force_plugin_row)
         form.addRow("Target branches (comma)", self.target_branches)
         form.addRow("Target threshold (mm)", self.target_threshold)
 
@@ -384,6 +443,9 @@ class EvaluateWidget(QWidget):
                 tools.append(f"{model}/{wire}")
         return tools
 
+    def _agent_ref_options(self) -> List[str]:
+        return [""] + sorted(self._agent_refs)
+
     def _add_agent_row(self):
         row = self.agent_table.rowCount()
         self.agent_table.insertRow(row)
@@ -391,32 +453,54 @@ class EvaluateWidget(QWidget):
         name_item = QTableWidgetItem(f"agent_{row}")
         self.agent_table.setItem(row, 0, name_item)
 
+        agent_ref_box = QComboBox()
+        agent_ref_box.setEditable(True)
+        agent_ref_box.addItems(self._agent_ref_options())
+        self.agent_table.setCellWidget(row, 1, agent_ref_box)
+
         tool_box = QComboBox()
         tool_box.addItems(self._tool_options())
-        self.agent_table.setCellWidget(row, 1, tool_box)
+        self.agent_table.setCellWidget(row, 2, tool_box)
 
         checkpoint_edit = QLineEdit()
-        checkpoint_edit.setPlaceholderText("Select a checkpoint .everl file…")
-        self.agent_table.setCellWidget(row, 2, checkpoint_edit)
+        checkpoint_edit.setPlaceholderText(
+            "Optional: override for agent_ref, required for explicit tool mode"
+        )
+        self.agent_table.setCellWidget(row, 3, checkpoint_edit)
+
+        resolved_item = QTableWidgetItem("")
+        resolved_item.setFlags(resolved_item.flags() & ~Qt.ItemIsEditable)
+        self.agent_table.setItem(row, 4, resolved_item)
+
+        source_item = QTableWidgetItem("")
+        source_item.setFlags(source_item.flags() & ~Qt.ItemIsEditable)
+        self.agent_table.setItem(row, 5, source_item)
 
         btn = QPushButton("Browse")
         btn.clicked.connect(lambda _=None, r=row: self._browse_checkpoint(r))
-        self.agent_table.setCellWidget(row, 3, btn)
+        self.agent_table.setCellWidget(row, 6, btn)
 
-        tool_box.currentTextChanged.connect(lambda _: self._maybe_autofill_checkpoint(row))
-        checkpoint_edit.textChanged.connect(lambda _: self._update_run_enabled())
+        agent_ref_box.currentTextChanged.connect(
+            lambda _: self._on_row_input_changed(row)
+        )
+        tool_box.currentTextChanged.connect(lambda _: self._on_row_input_changed(row))
+        checkpoint_edit.textChanged.connect(lambda _: self._on_row_input_changed(row))
         self._maybe_autofill_checkpoint(row)
+        self._resolve_row_preview(row)
+        self._update_run_enabled()
 
     def _refresh_trained_checkpoints(self):
         self._trained_by_tool = trained_checkpoints_by_tool()
+        self._agent_refs = list_agent_refs()
         if not self._trained_by_tool:
             self.chk_only_trained_tools.setChecked(False)
         self._rebuild_tool_dropdowns()
 
     def _rebuild_tool_dropdowns(self):
         options = self._tool_options()
+        agent_ref_options = self._agent_ref_options()
         for row in range(self.agent_table.rowCount()):
-            tool_box: QComboBox = self.agent_table.cellWidget(row, 1)  # type: ignore[assignment]
+            tool_box: QComboBox = self.agent_table.cellWidget(row, 2)  # type: ignore[assignment]
             if tool_box is None:
                 continue
             current = tool_box.currentText()
@@ -426,12 +510,30 @@ class EvaluateWidget(QWidget):
             if current and current in options:
                 tool_box.setCurrentText(current)
             tool_box.blockSignals(False)
+
+            agent_ref_box: QComboBox = self.agent_table.cellWidget(row, 1)  # type: ignore[assignment]
+            if agent_ref_box is not None:
+                current_ref = agent_ref_box.currentText()
+                agent_ref_box.blockSignals(True)
+                agent_ref_box.clear()
+                agent_ref_box.addItems(agent_ref_options)
+                if current_ref:
+                    agent_ref_box.setEditText(current_ref)
+                agent_ref_box.blockSignals(False)
+
             self._maybe_autofill_checkpoint(row)
+            self._resolve_row_preview(row)
+        self._update_run_enabled()
 
     def _maybe_autofill_checkpoint(self, row: int):
-        tool_box: QComboBox = self.agent_table.cellWidget(row, 1)  # type: ignore[assignment]
-        ckpt_edit: QLineEdit = self.agent_table.cellWidget(row, 2)  # type: ignore[assignment]
+        agent_ref_box: QComboBox = self.agent_table.cellWidget(row, 1)  # type: ignore[assignment]
+        tool_box: QComboBox = self.agent_table.cellWidget(row, 2)  # type: ignore[assignment]
+        ckpt_edit: QLineEdit = self.agent_table.cellWidget(row, 3)  # type: ignore[assignment]
         if tool_box is None or ckpt_edit is None:
+            return
+        agent_ref = agent_ref_box.currentText().strip() if agent_ref_box else ""
+        if agent_ref:
+            # Agent refs are resolved with pinned+fallback policy, don't auto-paste checkpoints.
             return
         if ckpt_edit.text().strip():
             return
@@ -442,6 +544,11 @@ class EvaluateWidget(QWidget):
             return
         ckpt_edit.setText(str(candidates[0].checkpoint_path))
 
+    def _on_row_input_changed(self, row: int):
+        self._maybe_autofill_checkpoint(row)
+        self._resolve_row_preview(row)
+        self._update_run_enabled()
+
     def _browse_checkpoint(self, row: int):
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -451,22 +558,74 @@ class EvaluateWidget(QWidget):
         )
         if not path:
             return
-        edit: QLineEdit = self.agent_table.cellWidget(row, 2)  # type: ignore[assignment]
+        edit: QLineEdit = self.agent_table.cellWidget(row, 3)  # type: ignore[assignment]
         edit.setText(path)
+        self._resolve_row_preview(row)
         self._update_run_enabled()
 
-    def _collect_agents(self) -> List[Dict[str, str]]:
-        agents: List[Dict[str, str]] = []
+    def _browse_force_plugin(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select wall-force monitor plugin",
+            str(Path.cwd()),
+            "Shared libraries (*.so *.dylib *.dll);;All files (*)",
+        )
+        if not path:
+            return
+        self.force_plugin_path.setText(path)
+
+    def _collect_candidates(self) -> List[Dict[str, str]]:
+        candidates: List[Dict[str, str]] = []
         for row in range(self.agent_table.rowCount()):
-            name = self.agent_table.item(row, 0).text() if self.agent_table.item(row, 0) else f"agent_{row}"
-            tool_box: QComboBox = self.agent_table.cellWidget(row, 1)  # type: ignore[assignment]
-            tool = tool_box.currentText() if tool_box else ""
-            ckpt_edit: QLineEdit = self.agent_table.cellWidget(row, 2)  # type: ignore[assignment]
-            ckpt = ckpt_edit.text().strip() if ckpt_edit else ""
-            if not tool or not ckpt:
-                continue
-            agents.append({"name": name, "tool": tool, "checkpoint": ckpt})
-        return agents
+            candidate = self._candidate_for_row(row)
+            if candidate:
+                candidates.append(candidate)
+        return candidates
+
+    def _candidate_for_row(self, row: int) -> Optional[Dict[str, str]]:
+        name = self.agent_table.item(row, 0).text() if self.agent_table.item(row, 0) else f"agent_{row}"
+        agent_ref_box: QComboBox = self.agent_table.cellWidget(row, 1)  # type: ignore[assignment]
+        tool_box: QComboBox = self.agent_table.cellWidget(row, 2)  # type: ignore[assignment]
+        tool = tool_box.currentText().strip() if tool_box else ""
+        agent_ref = agent_ref_box.currentText().strip() if agent_ref_box else ""
+        ckpt_edit: QLineEdit = self.agent_table.cellWidget(row, 3)  # type: ignore[assignment]
+        ckpt = ckpt_edit.text().strip() if ckpt_edit else ""
+
+        candidate: Dict[str, str] = {"name": name}
+        if agent_ref:
+            candidate["agent_ref"] = agent_ref
+            if ckpt:
+                candidate["checkpoint_override"] = ckpt
+        else:
+            # Ignore untouched rows where only the default tool dropdown is set.
+            if not ckpt:
+                return None
+            if tool:
+                candidate["tool"] = tool
+            candidate["checkpoint"] = ckpt
+        return candidate
+
+    def _resolve_row_preview(self, row: int) -> None:
+        resolved_item = self.agent_table.item(row, 4)
+        source_item = self.agent_table.item(row, 5)
+        if resolved_item is None or source_item is None:
+            return
+
+        resolved_item.setText("")
+        source_item.setText("")
+
+        row_candidate = self._candidate_for_row(row)
+        if row_candidate is None:
+            return
+
+        try:
+            cfg = comparison_from_dict({"name": "preview", "candidates": [row_candidate]})
+            resolved = resolve_comparison_candidates(cfg)[0]
+            resolved_item.setText(str(resolved.checkpoint))
+            source_item.setText(resolved.source)
+            resolved_item.setToolTip(str(resolved.checkpoint))
+        except Exception as exc:  # noqa: BLE001
+            source_item.setText(f"unresolved: {exc}")
 
     # ------------------------------------------------------------------
     # Config writing + evaluation process
@@ -509,13 +668,24 @@ class EvaluateWidget(QWidget):
 
         cfg = {
             "name": self.run_name.text().strip() or "ui_eval",
-            "agents": self._collect_agents(),
+            "candidates": self._collect_candidates(),
             "n_trials": int(self.n_trials.value()),
             "base_seed": int(self.base_seed.value()),
             "max_episode_steps": int(self.max_steps.value()),
             "policy_device": self.policy_device.currentText(),
             "use_non_mp_sim": bool(self.use_non_mp.isChecked()),
+            "stochastic_eval": bool(self.stochastic_eval.isChecked()),
+            "visualize": bool(self.visualize_eval.isChecked()),
+            "visualize_trials_per_agent": int(self.visualize_trials.value()),
             "output_root": "results/eval_runs",
+            "force_extraction": {
+                "mode": self.force_mode.currentText(),
+                "required": bool(self.force_required.isChecked()),
+                "contact_epsilon": float(self.force_contact_epsilon.value()),
+                "plugin_path": (
+                    self.force_plugin_path.text().strip() or None
+                ),
+            },
             "anatomy": anatomy,
             "scoring": {
                 "mode": "default_v1",
@@ -526,9 +696,14 @@ class EvaluateWidget(QWidget):
         }
         return cfg
 
+    def _resolve_candidates_from_ui(self):
+        cfg = comparison_from_dict(self._build_config_dict())
+        return resolve_comparison_candidates(cfg)
+
     def _write_config_only(self):
         try:
             cfg = self._build_config_dict()
+            comparison_from_dict(cfg)
         except Exception as e:
             self.log.append(f"[ui] error: {e}")
             return
@@ -543,6 +718,9 @@ class EvaluateWidget(QWidget):
     def _start_eval(self):
         try:
             cfg = self._build_config_dict()
+            resolved = self._resolve_candidates_from_ui()
+            if not resolved:
+                raise RuntimeError("No valid candidates resolved.")
         except Exception as e:
             self.log.append(f"[ui] error: {e}")
             return
@@ -553,11 +731,35 @@ class EvaluateWidget(QWidget):
         cfg_path = cfg_dir / f"{ts}_{cfg['name']}.yml"
         cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
         self.log.append(f"[ui] starting evaluation with config: {cfg_path}")
+        self.log.append(
+            "[ui] resolved candidates:\n"
+            + "\n".join(
+                f"  - {c.name} | tool={c.tool} | checkpoint={c.checkpoint} | source={c.source}"
+                for c in resolved
+            )
+        )
+        force_cfg = cfg.get("force_extraction", {})
+        plugin_path = force_cfg.get("plugin_path")
+        resolved_plugin = resolve_monitor_plugin_path(plugin_path)
+        if plugin_path:
+            plugin_state = "present" if Path(plugin_path).exists() else "missing"
+        else:
+            plugin_state = "resolved" if resolved_plugin is not None else "missing"
+        self.log.append(
+            "[ui] force extraction: mode={mode} required={required} epsilon={eps} plugin={plugin} ({state}) resolved={resolved}".format(
+                mode=force_cfg.get("mode", "passive"),
+                required=int(bool(force_cfg.get("required", False))),
+                eps=force_cfg.get("contact_epsilon", 1e-7),
+                plugin=plugin_path or "(auto)",
+                state=plugin_state,
+                resolved=str(resolved_plugin) if resolved_plugin is not None else "(none)",
+            )
+        )
 
         cmd = [
             sys.executable,
             "-m",
-            "steve_recommender.evaluation.run_cli",
+            "steve_recommender.comparison.run_cli",
             "--config",
             str(cfg_path),
         ]
@@ -618,6 +820,10 @@ class EvaluateWidget(QWidget):
         else:
             overrides["LD_LIBRARY_PATH"] = f"{conda_lib}:{old_ld}" if old_ld else conda_lib
 
+        plugin_path = self.force_plugin_path.text().strip()
+        if plugin_path:
+            overrides["STEVE_WALL_FORCE_MONITOR_PLUGIN"] = plugin_path
+
         return overrides
 
     def _apply_sofa_env_in_process(self) -> None:
@@ -634,9 +840,17 @@ class EvaluateWidget(QWidget):
         return self._playback_worker is not None and self._playback_worker.isRunning()
 
     def _update_run_enabled(self):
-        has_agents = len(self._collect_agents()) > 0
+        has_agents = False
+        candidates_valid = False
+        try:
+            resolved = self._resolve_candidates_from_ui()
+            has_agents = len(self._collect_candidates()) > 0
+            candidates_valid = bool(resolved)
+        except Exception:
+            has_agents = len(self._collect_candidates()) > 0
+            candidates_valid = False
         has_anatomy = self._selected_anatomy is not None
-        enabled = bool(has_agents and has_anatomy)
+        enabled = bool(has_agents and has_anatomy and candidates_valid)
         self.btn_run.setEnabled(enabled)
         self.btn_play.setEnabled(enabled)
         if self._is_playback_running():
@@ -658,9 +872,13 @@ class EvaluateWidget(QWidget):
             self.log.append("[ui] no anatomy selected")
             return
 
-        agents = self._collect_agents()
-        if not agents:
-            self.log.append("[ui] no agent configured")
+        try:
+            resolved_candidates = self._resolve_candidates_from_ui()
+        except Exception as e:
+            self.log.append(f"[ui] cannot resolve candidates: {e}")
+            return
+        if not resolved_candidates:
+            self.log.append("[ui] no valid candidate configured")
             return
 
         try:
@@ -669,9 +887,9 @@ class EvaluateWidget(QWidget):
             self.log.append(f"[ui] error: {e}")
             return
 
-        agent = agents[0]
-        tool = agent["tool"]
-        checkpoint = agent["checkpoint"]
+        candidate = resolved_candidates[0]
+        tool = candidate.tool
+        checkpoint = str(candidate.checkpoint)
 
         self._apply_sofa_env_in_process()
         os.environ.setdefault("SDL_VIDEO_WINDOW_POS", "-2000,-2000")
@@ -746,15 +964,19 @@ class EvaluateWidget(QWidget):
             self.log.append("[ui] no anatomy selected")
             return
 
-        agents = self._collect_agents()
-        if not agents:
-            self.log.append("[ui] no agent configured")
+        try:
+            resolved_candidates = self._resolve_candidates_from_ui()
+        except Exception as e:
+            self.log.append(f"[ui] cannot resolve candidates: {e}")
+            return
+        if not resolved_candidates:
+            self.log.append("[ui] no valid candidate configured")
             return
 
         # For now, use the first configured agent row.
-        agent = agents[0]
-        tool = agent["tool"]
-        checkpoint = agent["checkpoint"]
+        candidate = resolved_candidates[0]
+        tool = candidate.tool
+        checkpoint = str(candidate.checkpoint)
 
         cfg_dir = Path("results/eval_configs")
         cfg_dir.mkdir(parents=True, exist_ok=True)

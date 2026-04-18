@@ -1,0 +1,25 @@
+{
+  "default_version": "default",
+  "description": "Universal II J-shaped guidewire family.",
+  "display_name": "Universal II",
+  "family": "j_shaped_guidewire",
+  "name": "universal_ii",
+  "overall_properties": {
+    "length_mm": 450.0,
+    "velocity_limit": [
+      35.0,
+      3.14
+    ]
+  },
+  "producer": "Abbott",
+  "source": {
+    "legacy_model": "ArchVarJShaped",
+    "legacy_wires": [
+      "j_shaped_UniversalII"
+    ],
+    "migrated_at_utc": "2026-04-17T14:21:48.061549+00:00"
+  },
+  "wire_versions": [
+    "default"
+  ]
+}

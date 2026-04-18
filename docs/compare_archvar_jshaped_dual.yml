@@ -1,0 +1,53 @@
+name: compare_archvar_jshaped_dual
+
+candidates:
+  - name: jshaped_default
+    agent_ref: ArchVarJShaped/JShaped_Default:archvar_original_best
+  - name: jshaped_straighttip
+    agent_ref: ArchVarJShaped/JShaped_Default_StraightTip:archvar_tipradius_min_best
+
+n_trials: 1
+base_seed: 123
+max_episode_steps: 1000
+policy_device: cpu
+use_non_mp_sim: true
+stochastic_eval: false
+visualize: false
+visualize_trials_per_agent: 1
+
+force_extraction:
+  mode: constraint_projected_si_validated
+  required: true
+  contact_epsilon: 1.0e-7
+  units:
+    length_unit: mm
+    mass_unit: kg
+    time_unit: s
+  calibration:
+    required: true
+    cache_path: results/force_calibration/cache_archvar_jshaped_dual.json
+    tolerance_profile: default_v1
+
+scoring:
+  mode: default_v1
+  w_success: 2.0
+  w_efficiency: 1.0
+  w_safety: 1.0
+  w_smoothness: 0.25
+  normalize_weights: true
+  force_scale: 1.0
+  lcp_scale: 1.0
+  speed_scale_mm_s: 50.0
+
+output_root: results/eval_runs
+
+anatomy:
+  type: aortic_arch
+  arch_type: I
+  seed: 30
+  target_mode: branch_end
+  target_branches: ["lcca"]
+  target_threshold_mm: 5.0
+  image_frequency_hz: 7.5
+  image_rot_zx_deg: [20.0, 5.0]
+  friction: 0.1

@@ -1,0 +1,21 @@
+name: wire_registry_best_ckpt_smoke
+candidates:
+- agent_ref: amplatz_super_stiff/default:archvar_amplatz_superstiff_best
+- agent_ref: steve_default/default:archvar_original_best
+- agent_ref: steve_default/straight_tip:archvar_tipradius_min_best
+- agent_ref: universal_ii/default:archvar_universalII_best
+anatomy:
+  type: aortic_arch
+  arch_type: I
+  seed: 30
+  target_mode: branch_end
+  target_branches:
+  - lcca
+  target_threshold_mm: 5.0
+n_trials: 1
+base_seed: 123
+max_episode_steps: 500
+use_non_mp_sim: true
+stochastic_eval: false
+visualize: true
+visualize_trials_per_agent: 1

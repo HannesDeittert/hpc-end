@@ -19,13 +19,42 @@ stEVE integration isolated, business logic testable, and the UI thin.
 
 4) **Pipelines** (`steve_recommender/rl/` and `steve_recommender/evaluation/`)
    - Core training and evaluation logic.
-   - CLI entrypoints still live here (`steve-train`, `steve-eval`).
+   - Comparison orchestration (`steve_recommender/comparison/`) resolves
+     registry candidates into concrete tool+checkpoint pairs.
+   - CLI entrypoints: `steve-train`, `steve-eval`, `steve-compare`.
 
 5) **UI** (`steve_recommender/ui/` + `steve_recommender/main.py`)
    - PyQt UI that talks to services only.
    - Entry point: `steve-ui-qt`.
 
 ## Storage layout
+
+Canonical wire registry:
+
+```
+data/wire_registry/<model>/model_definition.json
+data/wire_registry/<model>/wire_versions/<version>/tool.py
+data/wire_registry/<model>/wire_versions/<version>/tool_definition.json
+data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/agent.json
+data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/checkpoints/*.everl
+```
+
+Migration details:
+`docs/archvar_to_wire_registry_migration.md`
+
+Legacy source (kept for traceability during transition):
+
+```
+data/ArchVarJShaped/wires/<wire>/...
+```
+
+Current canonical refs:
+- `steve_default/default`
+- `steve_default/straight_tip`
+- `amplatz_super_stiff/default`
+- `universal_ii/default`
+
+Historic layout:
 
 ```
 data/<model>/model_definition.json
@@ -64,7 +93,7 @@ class MyWire(Device):
 Option B: **User-generated wire** (UI output)
 
 ```
-data/<model>/wires/<wire>/tool.py
+data/wire_registry/<model>/wire_versions/<version>/tool.py
 ```
 
 The Qt wizard already generates this file, but future UIs should use the same
@@ -83,8 +112,20 @@ info = eve.info.Combination([..., MyCollector(intervention)])
 
 If you need access to SOFA internals, enable:
 
-```
+```yaml
 use_non_mp_sim: true
+force_extraction:
+  mode: passive
+  required: true
 ```
 
-in the evaluation config so the scene graph is accessible from Python.
+Build and export the native monitor plugin before running:
+
+```bash
+# Ubuntu: sudo apt install libboost-all-dev cmake build-essential
+scripts/build_wall_force_monitor.sh
+export STEVE_WALL_FORCE_MONITOR_PLUGIN=/.../libSofaWireForceMonitor.so
+```
+
+The monitor is injected by the recommender runtime (collector side), so
+upstream `third_party/stEVE` sources remain unchanged.

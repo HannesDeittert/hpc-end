@@ -21,8 +21,12 @@ def data_root() -> Path:
     return repo_root() / "data"
 
 
+def wire_registry_root() -> Path:
+    return data_root() / "wire_registry"
+
+
 def model_dir(model_name: str) -> Path:
-    return data_root() / model_name
+    return wire_registry_root() / model_name
 
 
 def model_definition_path(model_name: str) -> Path:
@@ -30,7 +34,7 @@ def model_definition_path(model_name: str) -> Path:
 
 
 def wires_root(model_name: str) -> Path:
-    return model_dir(model_name) / "wires"
+    return model_dir(model_name) / "wire_versions"
 
 
 def wire_dir(model_name: str, wire_name: str) -> Path:
@@ -57,7 +61,7 @@ def parse_wire_ref(ref: str) -> Tuple[Optional[str], str]:
 
 
 def list_models() -> List[str]:
-    root = data_root()
+    root = wire_registry_root()
     if not root.exists():
         return []
     names: List[str] = []
@@ -84,6 +88,7 @@ def ensure_model(model_name: str, description: str = "") -> Path:
     mdir = model_dir(model_name)
     mdir.mkdir(parents=True, exist_ok=True)
     (data_root() / "__init__.py").touch(exist_ok=True)
+    (wire_registry_root() / "__init__.py").touch(exist_ok=True)
     (mdir / "__init__.py").touch(exist_ok=True)
     wires_root(model_name).mkdir(parents=True, exist_ok=True)
     (wires_root(model_name) / "__init__.py").touch(exist_ok=True)

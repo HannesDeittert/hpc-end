@@ -127,7 +127,8 @@ smoothness:
 Notes:
 
 - `steps_to_success` is 1-based.
-- NaNs in force/speed inputs are treated as `0` (no penalty).
+- If force telemetry is unavailable in optional mode, safety is excluded and
+  remaining weights are renormalized.
 - `tip_speed_max_mm_s` comes from finite-difference velocity in tracking coords.
 
 ### Final score
@@ -135,11 +136,11 @@ Notes:
 ```text
 score = w_success * s_success
       + w_efficiency * s_eff
-      + w_safety * s_safety
+      + w_safety * s_safety    # only when force telemetry is available
       + w_smoothness * s_smooth
 
 if normalize_weights:
-  score /= (w_success + w_efficiency + w_safety + w_smoothness)
+  score /= sum(active_weights)
 ```
 
 Defaults (unless overridden in YAML):
@@ -161,9 +162,9 @@ Run directory: `results/eval_runs/<timestamp>_<name>/`
 
 ## Important force note
 
-Wall/contact forces are best-effort proxies:
+Force extraction supports two modes:
 
-- `wall_lcp_*` from LCP constraint solver
-- `wall_wire_force_norm`, `wall_collision_force_norm` from SOFA DOFs
+- `passive` (preferred): reads full-wire vectors via `WireWallForceMonitor`.
+- `intrusive_lcp` (explicit fallback): enables LCP force telemetry and may alter trajectories.
 
-They are only accessible if `use_non_mp_sim: true`; otherwise values are `NaN` or `0`.
+Set `force_extraction.required: true` to fail fast when telemetry is missing or inconsistent.

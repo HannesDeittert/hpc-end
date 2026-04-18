@@ -1,0 +1,52 @@
+name: eval_hq_validated_smoke
+
+agents:
+  - name: baseline_stdj
+    tool: TestModel_StandardJ035/StandardJ035_PTFE
+    checkpoint: /home/hannes-deittert/dev/Uni/master-project/checkpoints/imported/checkpoint8538897.everl
+
+n_trials: 1
+base_seed: 123
+max_episode_steps: 1000
+policy_device: cpu
+use_non_mp_sim: true
+stochastic_eval: false
+visualize: false
+
+force_extraction:
+  mode: constraint_projected_si_validated
+  required: true
+  contact_epsilon: 1.0e-7
+  # plugin_path: /absolute/path/to/libSofaWireForceMonitor.so
+  units:
+    length_unit: mm
+    mass_unit: kg
+    time_unit: s
+  calibration:
+    required: true
+    cache_path: results/force_calibration/cache_hq_validated_smoke.json
+    tolerance_profile: default_v1
+
+scoring:
+  mode: default_v1
+  w_success: 2.0
+  w_efficiency: 1.0
+  w_safety: 1.0
+  w_smoothness: 0.25
+  normalize_weights: true
+  force_scale: 1.0
+  lcp_scale: 1.0
+  speed_scale_mm_s: 50.0
+
+output_root: results/eval_runs
+
+anatomy:
+  type: aortic_arch
+  arch_type: I
+  seed: 30
+  target_mode: branch_end
+  target_branches: ["lcca"]
+  target_threshold_mm: 5.0
+  image_frequency_hz: 7.5
+  image_rot_zx_deg: [20.0, 5.0]
+  friction: 0.001

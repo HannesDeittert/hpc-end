@@ -1,0 +1,31 @@
+name: compare_archvar_visual_all
+
+candidates:
+  - name: archvar_default
+    agent_ref: ArchVarJShaped/JShaped_Default:archvar_original_best
+  - name: archvar_straighttip
+    agent_ref: ArchVarJShaped/JShaped_Default_StraightTip:archvar_tipradius_min_best
+
+n_trials: 3
+base_seed: 123
+max_episode_steps: 1000
+policy_device: cpu
+use_non_mp_sim: true
+stochastic_eval: false
+visualize: true
+visualize_trials_per_agent: 3
+
+force_extraction:
+  mode: passive
+  required: false
+  contact_epsilon: 1.0e-7
+
+output_root: results/eval_runs
+
+anatomy:
+  type: aortic_arch
+  arch_type: I
+  seed: 30
+  target_mode: branch_end
+  target_branches: ["lcca"]
+  target_threshold_mm: 5.0

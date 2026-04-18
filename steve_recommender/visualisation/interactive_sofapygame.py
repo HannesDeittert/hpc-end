@@ -50,8 +50,8 @@ class InteractiveSofaPygame(eve.visualisation.SofaPygame):
         if self._pygame is None:
             self._pygame = importlib.import_module("pygame")
 
-    def _handle_keyboard(self) -> None:
-        """Apply keyboard-driven camera updates before rendering."""
+    def poll_events(self) -> None:
+        """Pump pygame events to keep the window responsive."""
         self._ensure_pygame()
         pg = self._pygame
 
@@ -59,6 +59,11 @@ class InteractiveSofaPygame(eve.visualisation.SofaPygame):
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 raise KeyboardInterrupt()
+
+    def apply_keyboard_controls(self) -> None:
+        """Apply keyboard-driven camera updates."""
+        self._ensure_pygame()
+        pg = self._pygame
 
         keys = pg.key.get_pressed()
         lao_rao = 0.0
@@ -83,6 +88,11 @@ class InteractiveSofaPygame(eve.visualisation.SofaPygame):
             self.rotate(lao_rao, cra_cau)
         if zoom:
             self.zoom(zoom)
+
+    def _handle_keyboard(self) -> None:
+        """Process events and keyboard controls."""
+        self.poll_events()
+        self.apply_keyboard_controls()
 
     def render(self) -> np.ndarray:
         # Apply keyboard controls, then delegate to the base implementation.

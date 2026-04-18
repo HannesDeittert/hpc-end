@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/agents/archvar_original_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_original_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/agents/archvar_original_best/checkpoints",
+  "source_agent_json": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/JShaped_Default/agents/archvar_original_best/agent.json",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/JShaped_Default/agents/archvar_original_best/best_checkpoint.everl",
+  "tool": "steve_default/default"
+}

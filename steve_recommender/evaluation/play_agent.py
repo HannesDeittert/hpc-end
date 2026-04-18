@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from typing import Optional
 
 import numpy as np
 
@@ -77,7 +78,7 @@ def _load_anatomy_spec(args) -> "AorticArchSpec":
 
     if args.arch_record:
         dataset = load_aortic_arch_dataset(args.dataset_root)
-        record: AorticArchRecord | None = None
+        record: Optional[AorticArchRecord] = None
         for r in dataset.iter_index():
             if r.record_id == args.arch_record:
                 record = r
@@ -120,6 +121,9 @@ def main() -> None:
     import torch
 
     from steve_recommender.evaluation.intervention_factory import build_aortic_arch_intervention
+    from steve_recommender.evaluation.torch_checkpoint_compat import (
+        legacy_checkpoint_load_context,
+    )
     from steve_recommender.rl.bench_env import BenchEnv
     from steve_recommender.adapters import eve, eve_rl
 
@@ -137,7 +141,8 @@ def main() -> None:
     )
 
     device = torch.device(args.device)
-    algo = eve_rl.algo.AlgoPlayOnly.from_checkpoint(args.checkpoint)
+    with legacy_checkpoint_load_context():
+        algo = eve_rl.algo.AlgoPlayOnly.from_checkpoint(args.checkpoint)
     algo.to(device)
 
     try:

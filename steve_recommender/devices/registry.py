@@ -8,13 +8,16 @@ from types import ModuleType
 from typing import Any, Dict, List, Optional, Type
 
 
-from steve_recommender.storage import data_root, list_models, parse_wire_ref, wire_py_path
+from steve_recommender.storage import (
+    data_root,
+    list_models,
+    parse_wire_ref,
+    wire_py_path,
+    wires_root,
+)
 
 
 DATA_DIR = data_root()
-
-# Legacy fallback if older runs wrote tools directly under data/<tool>/tool.py
-LEGACY_FLAT_DATA_DIR = DATA_DIR
 
 
 _NON_IDENT = re.compile(r"[^0-9A-Za-z_]")
@@ -38,24 +41,18 @@ def _load_module_from_path(module_name: str, path: Path) -> ModuleType:
 def list_devices(data_dir: Path = DATA_DIR) -> List[str]:
     """Return available device refs.
 
-    New layout: data/<model>/wires/<wire>/tool.py -> "model/wire"
-    Legacy layout: data/<wire>/tool.py -> "wire"
+    Canonical layout: data/wire_registry/<model>/wire_versions/<version>/tool.py
+    -> "model/version"
     """
     names: List[str] = []
 
     for model in list_models():
-        model_dir = data_dir / model / "wires"
-        if not model_dir.exists():
+        versions_root = wires_root(model)
+        if not versions_root.exists():
             continue
-        for wire in sorted(model_dir.iterdir()):
+        for wire in sorted(versions_root.iterdir()):
             if wire.is_dir() and (wire / "tool.py").exists():
                 names.append(f"{model}/{wire.name}")
-
-    if LEGACY_FLAT_DATA_DIR.exists():
-        for child in sorted(LEGACY_FLAT_DATA_DIR.iterdir()):
-            if child.is_dir() and (child / "tool.py").exists():
-                if child.name not in names:
-                    names.append(child.name)
     return names
 
 
@@ -66,9 +63,7 @@ def load_device_class(
 ) -> Type[Any]:
     """Load the device class from the stored tool module.
 
-    Accepts either:
-    - "model/wire" (preferred): data/<model>/wires/<wire>/tool.py
-    - "wire" (legacy): data/<wire>/tool.py
+    Accepts "model/version" refs, resolved through storage paths.
     """
     model, wire = parse_wire_ref(tool_name)
 
@@ -79,32 +74,18 @@ def load_device_class(
 
         # Prefer a normal import so pickling works with multiprocessing ("spawn").
         try:
-            mod = __import__(f"data.{model}.wires.{wire}.tool", fromlist=["*"])
+            mod = __import__(
+                f"data.wire_registry.{model}.wire_versions.{wire}.tool",
+                fromlist=["*"],
+            )
         except Exception:
             mod = _load_module_from_path(
                 f"steve_tool_{_safe_module_name(tool_name)}",
                 tool_py,
             )
     else:
-        tool_py = data_dir / wire / "tool.py"
-        if not tool_py.exists():
-            matches: List[Path] = []
-            for m in list_models():
-                candidate = wire_py_path(m, wire)
-                if candidate.exists():
-                    matches.append(candidate)
-            if len(matches) == 1:
-                tool_py = matches[0]
-            elif len(matches) > 1:
-                refs = ", ".join(f"{p.parents[1].name}/{p.parent.name}" for p in matches)
-                raise FileNotFoundError(
-                    f"Ambiguous wire name '{wire}'. Use one of: {refs}"
-                )
-            else:
-                raise FileNotFoundError(f"No tool.py for '{tool_name}' at {tool_py}")
-        mod = _load_module_from_path(
-            f"steve_tool_{_safe_module_name(tool_name)}",
-            tool_py,
+        raise FileNotFoundError(
+            f"Tool ref '{tool_name}' must be fully qualified as 'model/version'."
         )
 
     class_name = expected_class_name or wire

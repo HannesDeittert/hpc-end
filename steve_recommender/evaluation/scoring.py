@@ -39,7 +39,9 @@ def compute_default_v1(
     tip_speed_max_mm_s: float,
     wall_wire_force_norm_max: float,
     wall_collision_force_norm_max: float,
+    wall_total_force_norm_max: float,
     wall_lcp_max_abs_max: float,
+    force_available: bool,
     scoring: ScoringConfig,
 ) -> TrialScore:
     """Default scoring function (`mode=default_v1`).
@@ -67,23 +69,28 @@ def compute_default_v1(
         s_eff = 1.0 - (float(steps_to_success) - 1.0) / float(max_episode_steps)
         s_eff = _clip01(s_eff)
 
-    # 3) Safety (penalize max forces; treat NaNs as "no penalty" to avoid breaking runs)
-    force_max = float(np.nanmax([wall_wire_force_norm_max, wall_collision_force_norm_max]))
-    force_max = _finite_or(force_max, 0.0)
-    lcp_max = _finite_or(float(wall_lcp_max_abs_max), 0.0)
+    # 3) Safety (penalize max forces)
+    if force_available:
+        _ = wall_wire_force_norm_max
+        _ = wall_collision_force_norm_max
+        force_max = float(wall_total_force_norm_max)
+        force_max = _finite_or(force_max, 0.0)
+        lcp_max = _finite_or(float(wall_lcp_max_abs_max), 0.0)
 
-    # exp(-x/scale) yields 1.0 for x=0 and decays smoothly.
-    if scoring.force_scale > 0:
-        safety_force = float(np.exp(-force_max / float(scoring.force_scale)))
+        # exp(-x/scale) yields 1.0 for x=0 and decays smoothly.
+        if scoring.force_scale > 0:
+            safety_force = float(np.exp(-force_max / float(scoring.force_scale)))
+        else:
+            safety_force = 1.0
+
+        if scoring.lcp_scale > 0:
+            safety_lcp = float(np.exp(-lcp_max / float(scoring.lcp_scale)))
+        else:
+            safety_lcp = 1.0
+
+        s_safety = _clip01(safety_force * safety_lcp)
     else:
-        safety_force = 1.0
-
-    if scoring.lcp_scale > 0:
-        safety_lcp = float(np.exp(-lcp_max / float(scoring.lcp_scale)))
-    else:
-        safety_lcp = 1.0
-
-    s_safety = _clip01(safety_force * safety_lcp)
+        s_safety = float("nan")
 
     # 4) Smoothness (penalize peak tip speed)
     tip_speed_max_mm_s = _finite_or(float(tip_speed_max_mm_s), 0.0)
@@ -94,11 +101,18 @@ def compute_default_v1(
     s_smooth = _clip01(s_smooth)
 
     # Weighted sum (optionally normalized)
+    weight_success = float(scoring.w_success)
+    weight_efficiency = float(scoring.w_efficiency)
+    weight_safety = float(scoring.w_safety if force_available else 0.0)
+    weight_smoothness = float(scoring.w_smoothness)
     weights = np.array(
-        [scoring.w_success, scoring.w_efficiency, scoring.w_safety, scoring.w_smoothness],
+        [weight_success, weight_efficiency, weight_safety, weight_smoothness],
         dtype=np.float64,
     )
-    comps = np.array([s_success, s_eff, s_safety, s_smooth], dtype=np.float64)
+    comps = np.array(
+        [s_success, s_eff, 0.0 if not force_available else s_safety, s_smooth],
+        dtype=np.float64,
+    )
     score = float(np.sum(weights * comps))
 
     if scoring.normalize_weights:
@@ -124,7 +138,9 @@ def score_trial(
     tip_speed_max_mm_s: float,
     wall_wire_force_norm_max: float,
     wall_collision_force_norm_max: float,
+    wall_total_force_norm_max: float = float("nan"),
     wall_lcp_max_abs_max: float,
+    force_available: bool = True,
 ) -> TrialScore:
     """Dispatch to the configured scoring mode."""
 
@@ -136,7 +152,9 @@ def score_trial(
             tip_speed_max_mm_s=tip_speed_max_mm_s,
             wall_wire_force_norm_max=wall_wire_force_norm_max,
             wall_collision_force_norm_max=wall_collision_force_norm_max,
+            wall_total_force_norm_max=wall_total_force_norm_max,
             wall_lcp_max_abs_max=wall_lcp_max_abs_max,
+            force_available=bool(force_available),
             scoring=scoring,
         )
 
@@ -148,4 +166,3 @@ def aggregate_scores(values: np.ndarray) -> Tuple[float, float]:
 
     values = np.asarray(values, dtype=np.float64)
     return float(np.nanmean(values)), float(np.nanstd(values))
-
