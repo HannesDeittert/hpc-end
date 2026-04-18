@@ -20,7 +20,7 @@ class ComparisonCandidateSpec:
     """One comparison candidate.
 
     A candidate can be expressed in two ways:
-    - registry-driven via ``agent_ref`` (`model/wire:agent`)
+    - registry-driven via ``agent_ref`` (`model/version:agent`)
     - explicit via ``tool`` + ``checkpoint``
     """
 

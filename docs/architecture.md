@@ -29,6 +29,33 @@ stEVE integration isolated, business logic testable, and the UI thin.
 
 ## Storage layout
 
+Canonical wire registry:
+
+```
+data/wire_registry/<model>/model_definition.json
+data/wire_registry/<model>/wire_versions/<version>/tool.py
+data/wire_registry/<model>/wire_versions/<version>/tool_definition.json
+data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/agent.json
+data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/checkpoints/*.everl
+```
+
+Migration details:
+`docs/archvar_to_wire_registry_migration.md`
+
+Legacy source (kept for traceability during transition):
+
+```
+data/ArchVarJShaped/wires/<wire>/...
+```
+
+Current canonical refs:
+- `steve_default/default`
+- `steve_default/straight_tip`
+- `amplatz_super_stiff/default`
+- `universal_ii/default`
+
+Historic layout:
+
 ```
 data/<model>/model_definition.json
 data/<model>/wires/<wire>/tool.py
@@ -66,7 +93,7 @@ class MyWire(Device):
 Option B: **User-generated wire** (UI output)
 
 ```
-data/<model>/wires/<wire>/tool.py
+data/wire_registry/<model>/wire_versions/<version>/tool.py
 ```
 
 The Qt wizard already generates this file, but future UIs should use the same

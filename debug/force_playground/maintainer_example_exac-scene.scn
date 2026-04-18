@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<Node 	 name="@/.name"  printLog="@/.printLog"  tags="@/.tags"  bbox="@/.bbox"  componentState="@/.componentState"  activated="@/.activated"  gravity="@/.gravity"  dt="@/.dt"  time="@/.time"  animate="@/.animate"  sleeping="@/.sleeping"  canChangeSleepingState="@/.canChangeSleepingState"  >
+	<DefaultVisualManagerLoop name="@/DefaultVisualManagerLoop.name"  printLog="@/DefaultVisualManagerLoop.printLog"  tags="@/DefaultVisualManagerLoop.tags"  bbox="@/DefaultVisualManagerLoop.bbox"  componentState="@/DefaultVisualManagerLoop.componentState"  listening="@/DefaultVisualManagerLoop.listening"  targetNode="@./" />
+	<DefaultAnimationLoop name="@/DefaultAnimationLoop.name"  printLog="@/DefaultAnimationLoop.printLog"  tags="@/DefaultAnimationLoop.tags"  bbox="@/DefaultAnimationLoop.bbox"  componentState="@/DefaultAnimationLoop.componentState"  listening="@/DefaultAnimationLoop.listening"  computeBoundingBox="@/DefaultAnimationLoop.computeBoundingBox" />
+	<VisualStyle name="@/VisualStyle.name"  printLog="@/VisualStyle.printLog"  tags="@/VisualStyle.tags"  bbox="@/VisualStyle.bbox"  componentState="@/VisualStyle.componentState"  listening="@/VisualStyle.listening"  displayFlags="@/VisualStyle.displayFlags" />
+</Node>

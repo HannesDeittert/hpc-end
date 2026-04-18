@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/agents/archvar_tipradius_min_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_tipradius_min_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/agents/archvar_tipradius_min_best/checkpoints",
+  "source_agent_json": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/JShaped_Default_StraightTip/agents/archvar_tipradius_min_best/agent.json",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/JShaped_Default_StraightTip/agents/archvar_tipradius_min_best/best_checkpoint.everl",
+  "tool": "steve_default/straight_tip"
+}

@@ -20,16 +20,16 @@ _CHECKPOINT_NUM_RE = re.compile(r"^checkpoint(?P<step>\d+)\.everl$")
 
 
 def _split_agent_ref(agent_ref: str) -> Tuple[str, str, str]:
-    """Parse `model/wire:agent` into `(model, wire, agent)`."""
+    """Parse `model/version:agent` into `(model, version, agent)`."""
 
     if ":" not in agent_ref:
         raise ValueError(
-            f"Invalid agent_ref '{agent_ref}'. Expected format: model/wire:agent"
+            f"Invalid agent_ref '{agent_ref}'. Expected format: model/version:agent"
         )
     tool_ref, agent_name = agent_ref.rsplit(":", 1)
     if "/" not in tool_ref:
         raise ValueError(
-            f"Invalid agent_ref '{agent_ref}'. Missing model/wire segment."
+            f"Invalid agent_ref '{agent_ref}'. Missing model/version segment."
         )
     model, wire = tool_ref.split("/", 1)
     model = model.strip()
@@ -37,7 +37,7 @@ def _split_agent_ref(agent_ref: str) -> Tuple[str, str, str]:
     agent_name = agent_name.strip()
     if not model or not wire or not agent_name:
         raise ValueError(
-            f"Invalid agent_ref '{agent_ref}'. Expected format: model/wire:agent"
+            f"Invalid agent_ref '{agent_ref}'. Expected format: model/version:agent"
         )
     return model, wire, agent_name
 
@@ -52,14 +52,18 @@ def _try_parse_json(path: Path) -> Dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _resolve_existing_path(path_str: str, *, agent_dir: Optional[Path] = None) -> Optional[Path]:
+def _resolve_existing_path(
+    path_str: str,
+    *,
+    base_dirs: Optional[Iterable[Path]] = None,
+) -> Optional[Path]:
     candidate = Path(path_str).expanduser()
     paths_to_try: List[Path] = []
     if candidate.is_absolute():
         paths_to_try.append(candidate)
     else:
-        if agent_dir is not None:
-            paths_to_try.append((agent_dir / candidate).resolve())
+        for base in base_dirs or ():
+            paths_to_try.append((base / candidate).resolve())
         paths_to_try.append(candidate.resolve())
 
     for p in paths_to_try:
@@ -68,24 +72,47 @@ def _resolve_existing_path(path_str: str, *, agent_dir: Optional[Path] = None) -
     return None
 
 
-def _highest_numeric_checkpoint(agent_dir: Path) -> Optional[Path]:
-    numbered: List[Tuple[int, Path]] = []
-    for p in agent_dir.glob("checkpoint*.everl"):
-        m = _CHECKPOINT_NUM_RE.match(p.name)
-        if not m:
+def _candidate_checkpoint_dirs(agent_dir: Path, metadata: Dict[str, object]) -> List[Path]:
+    dirs: List[Path] = [agent_dir, agent_dir / "checkpoints"]
+
+    run_dir = metadata.get("run_dir")
+    if isinstance(run_dir, str) and run_dir.strip():
+        dirs.append(Path(run_dir).expanduser())
+
+    # Keep order stable while deduplicating.
+    deduped: List[Path] = []
+    seen: set[str] = set()
+    for d in dirs:
+        key = str(d.resolve()) if d.exists() else str(d)
+        if key in seen:
             continue
-        numbered.append((int(m.group("step")), p))
+        seen.add(key)
+        deduped.append(d)
+    return deduped
+
+
+def _highest_numeric_checkpoint(checkpoint_dirs: Iterable[Path]) -> Optional[Path]:
+    numbered: List[Tuple[int, Path]] = []
+    for checkpoint_dir in checkpoint_dirs:
+        if not checkpoint_dir.exists():
+            continue
+        for p in checkpoint_dir.glob("checkpoint*.everl"):
+            m = _CHECKPOINT_NUM_RE.match(p.name)
+            if not m:
+                continue
+            numbered.append((int(m.group("step")), p))
     if not numbered:
         return None
     return max(numbered, key=lambda t: t[0])[1]
 
 
-def _latest_everl(agent_dir: Path) -> Optional[Path]:
-    all_everl = sorted(
-        agent_dir.glob("*.everl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+def _latest_everl(checkpoint_dirs: Iterable[Path]) -> Optional[Path]:
+    all_everl: List[Path] = []
+    for checkpoint_dir in checkpoint_dirs:
+        if not checkpoint_dir.exists():
+            continue
+        all_everl.extend(checkpoint_dir.glob("*.everl"))
+    all_everl.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return all_everl[0] if all_everl else None
 
 
@@ -110,6 +137,7 @@ def _resolve_registry_candidate(spec: ComparisonCandidateSpec) -> ResolvedCandid
         )
 
     metadata = _try_parse_json(agent_dir / "agent.json")
+    checkpoint_dirs = _candidate_checkpoint_dirs(agent_dir, metadata)
 
     tool_from_metadata = metadata.get("tool")
     if isinstance(tool_from_metadata, str) and tool_from_metadata.strip():
@@ -120,7 +148,10 @@ def _resolve_registry_candidate(spec: ComparisonCandidateSpec) -> ResolvedCandid
     # Pinned + fallback policy.
     # 1) checkpoint_override (run config)
     if spec.checkpoint_override:
-        resolved = _resolve_existing_path(spec.checkpoint_override, agent_dir=agent_dir)
+        resolved = _resolve_existing_path(
+            spec.checkpoint_override,
+            base_dirs=checkpoint_dirs,
+        )
         if resolved is None:
             raise FileNotFoundError(
                 f"checkpoint_override does not exist for '{spec.agent_ref}': {spec.checkpoint_override}"
@@ -132,7 +163,10 @@ def _resolve_registry_candidate(spec: ComparisonCandidateSpec) -> ResolvedCandid
 
     # 2) explicit checkpoint in candidate (optional convenience)
     if resolved is None and spec.checkpoint:
-        resolved = _resolve_existing_path(spec.checkpoint, agent_dir=agent_dir)
+        resolved = _resolve_existing_path(
+            spec.checkpoint,
+            base_dirs=checkpoint_dirs,
+        )
         if resolved is None:
             raise FileNotFoundError(
                 f"checkpoint does not exist for '{spec.agent_ref}': {spec.checkpoint}"
@@ -145,27 +179,32 @@ def _resolve_registry_candidate(spec: ComparisonCandidateSpec) -> ResolvedCandid
         if not preferred:
             preferred = metadata.get("checkpoint")
         if isinstance(preferred, str) and preferred.strip():
-            resolved = _resolve_existing_path(preferred, agent_dir=agent_dir)
+            resolved = _resolve_existing_path(
+                preferred,
+                base_dirs=checkpoint_dirs,
+            )
             if resolved is not None:
                 source = "agent.json"
 
     # 4) best_checkpoint.everl
     if resolved is None:
-        best = agent_dir / "best_checkpoint.everl"
-        if best.exists():
-            resolved = best
-            source = "best_checkpoint.everl"
+        for checkpoint_dir in checkpoint_dirs:
+            best = checkpoint_dir / "best_checkpoint.everl"
+            if best.exists():
+                resolved = best
+                source = "best_checkpoint.everl"
+                break
 
     # 5) highest checkpoint*.everl (numeric)
     if resolved is None:
-        highest = _highest_numeric_checkpoint(agent_dir)
+        highest = _highest_numeric_checkpoint(checkpoint_dirs)
         if highest is not None:
             resolved = highest
             source = "highest_checkpointN"
 
     # 6) latest *.everl
     if resolved is None:
-        latest = _latest_everl(agent_dir)
+        latest = _latest_everl(checkpoint_dirs)
         if latest is not None:
             resolved = latest
             source = "latest_everl"
@@ -195,7 +234,7 @@ def _resolve_explicit_candidate(spec: ComparisonCandidateSpec) -> ResolvedCandid
         )
 
     if spec.checkpoint_override:
-        resolved = _resolve_existing_path(spec.checkpoint_override)
+        resolved = _resolve_existing_path(spec.checkpoint_override, base_dirs=())
         if resolved is None:
             raise FileNotFoundError(
                 f"checkpoint_override does not exist: {spec.checkpoint_override}"
@@ -203,7 +242,7 @@ def _resolve_explicit_candidate(spec: ComparisonCandidateSpec) -> ResolvedCandid
         source = "checkpoint_override"
     else:
         assert spec.checkpoint
-        resolved = _resolve_existing_path(spec.checkpoint)
+        resolved = _resolve_existing_path(spec.checkpoint, base_dirs=())
         if resolved is None:
             raise FileNotFoundError(f"checkpoint does not exist: {spec.checkpoint}")
         source = "explicit_checkpoint"

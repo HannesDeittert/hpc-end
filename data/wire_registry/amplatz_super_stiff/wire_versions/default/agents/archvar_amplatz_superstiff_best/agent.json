@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/agents/archvar_amplatz_superstiff_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_amplatz_superstiff_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/agents/archvar_amplatz_superstiff_best/checkpoints",
+  "source_agent_json": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/j_shaped_AmplatzSuperStiff/agents/archvar_amplatz_superstiff_best/agent.json",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/j_shaped_AmplatzSuperStiff/agents/archvar_amplatz_superstiff_best/best_checkpoint.everl",
+  "tool": "amplatz_super_stiff/default"
+}

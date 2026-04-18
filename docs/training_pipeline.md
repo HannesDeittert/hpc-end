@@ -17,14 +17,26 @@ The helper script `scripts/sofa_env.sh` sets these for the current shell.
 
 ## 2) Data layout (models + wires)
 
-Created wires are stored under `data/`:
+Canonical wire registry layout:
 
-- `data/<model>/model_definition.json`
-- `data/<model>/wires/<wire>/tool.py`
-- `data/<model>/wires/<wire>/tool_definition.json`
-- `data/<model>/wires/<wire>/agents/` (optional artifacts)
+- `data/wire_registry/<model>/model_definition.json`
+- `data/wire_registry/<model>/wire_versions/<version>/tool.py`
+- `data/wire_registry/<model>/wire_versions/<version>/tool_definition.json`
+- `data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/agent.json`
+- `data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/checkpoints/*.everl`
 
-Wires are referenced as `<model>/<wire>`, e.g. `TestModel_StandardJ035/StandardJ035_PTFE`.
+Tools are referenced as `<model>/<version>`, e.g. `steve_default/default`.
+
+Current migrated ArchVar refs:
+
+- `steve_default/default`
+- `steve_default/straight_tip`
+- `amplatz_super_stiff/default`
+- `universal_ii/default`
+
+Legacy ArchVar source paths are retained for provenance only:
+
+- `data/ArchVarJShaped/wires/<wire>/...`
 
 ## 3) Quick environment sanity checks
 
@@ -60,7 +72,7 @@ docker run --gpus all --ipc=host --shm-size 15G -it \
 Inside the container:
 
 ```bash
-python3 -m steve_recommender.rl.train_paper_arch --tool <model/wire> --device cuda --workers 8
+python3 -m steve_recommender.rl.train_paper_arch --tool <model/version> --device cuda --workers 8
 ```
 
 You can also run the upstream stEVE_training scripts directly:
@@ -77,7 +89,7 @@ Recommended: run with `nohup` so it survives terminal closes/logouts.
 ```bash
 conda activate master-project
 bash scripts/train_paper.sh \
-  --tool TestModel_StandardJ035/StandardJ035_PTFE \
+  --tool steve_default/default \
   --name paper_standardj \
   --device cuda \
   --workers 16
@@ -88,7 +100,7 @@ Outputs:
 - `results/paper_runs/<timestamp>_<name>/main.log` (structured logger)
 - `results/paper_runs/<timestamp>_<name>/checkpoints/*.everl`
 - `results/paper_runs/<timestamp>_<name>.csv`
-- `data/<model>/wires/<wire>/agents/<name>/agent.json` (agent registry entry)
+- `data/wire_registry/<model>/wire_versions/<version>/agents/<name>/agent.json`
 
 Monitor:
 ```bash
@@ -110,7 +122,7 @@ kill -TERM "$(cat results/paper_runs/paper_standardj.pid)"
 ```bash
 conda activate master-project
 bash scripts/train_paper.sh \
-  --tool TestModel_StandardJ035/StandardJ035_PTFE \
+  --tool steve_default/default \
   --name paper_standardj_resume \
   --device cuda \
   --workers 16 \
@@ -131,7 +143,7 @@ Start training with TensorBoard logging enabled:
 ```bash
 conda activate master-project
 bash scripts/train_paper.sh \
-  --tool TestModel_StandardJ035/StandardJ035_PTFE \
+  --tool steve_default/default \
   --name paper_standardj \
   --device cuda \
   --workers 16 \

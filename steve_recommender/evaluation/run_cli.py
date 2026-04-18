@@ -35,6 +35,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="If visualization is enabled, render only the first N trials per agent.",
     )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=None,
+        help="Override config and run exactly N trials per agent.",
+    )
+    parser.add_argument(
+        "--policy-device",
+        default=None,
+        help="Override config and run policy inference on this torch device (e.g. cpu, cuda).",
+    )
     force_dbg_group = parser.add_mutually_exclusive_group()
     force_dbg_group.add_argument(
         "--visualize-force-debug",
@@ -122,6 +133,12 @@ def main() -> None:
         if args.visualize_trials_per_agent < 1:
             raise ValueError("--visualize-trials-per-agent must be >= 1")
         cfg = replace(cfg, visualize_trials_per_agent=int(args.visualize_trials_per_agent))
+    if args.n_trials is not None:
+        if args.n_trials < 1:
+            raise ValueError("--n-trials must be >= 1")
+        cfg = replace(cfg, n_trials=int(args.n_trials))
+    if args.policy_device is not None:
+        cfg = replace(cfg, policy_device=str(args.policy_device))
     if args.visualize_force_debug is not None:
         cfg = replace(cfg, visualize_force_debug=bool(args.visualize_force_debug))
     if args.visualize_force_top_k is not None:

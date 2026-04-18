@@ -1,0 +1,25 @@
+{
+  "default_version": "default",
+  "description": "Amplatz Super Stiff J-shaped guidewire family.",
+  "display_name": "Amplatz Super Stiff",
+  "family": "j_shaped_guidewire",
+  "name": "amplatz_super_stiff",
+  "overall_properties": {
+    "length_mm": 450.0,
+    "velocity_limit": [
+      35.0,
+      3.14
+    ]
+  },
+  "producer": "Boston Scientific",
+  "source": {
+    "legacy_model": "ArchVarJShaped",
+    "legacy_wires": [
+      "j_shaped_AmplatzSuperStiff"
+    ],
+    "migrated_at_utc": "2026-04-17T14:21:48.061547+00:00"
+  },
+  "wire_versions": [
+    "default"
+  ]
+}
