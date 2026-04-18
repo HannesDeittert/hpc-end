@@ -107,7 +107,13 @@ class ModelDetailDialog(QDialog):
             agents_path = wire_agents_dir(self.model_name, wire)
             agent_count = 0
             if agents_path.exists():
-                agent_count = sum(1 for p in agents_path.iterdir() if p.is_dir())
+                agent_count = sum(
+                    1
+                    for p in agents_path.iterdir()
+                    if p.is_dir()
+                    and not p.name.startswith("__")
+                    and (p / "agent.json").exists()
+                )
             row.addWidget(QLabel(f"{agent_count} agent{'s' if agent_count != 1 else ''}"))
 
             open_btn = QPushButton("Open")
@@ -128,4 +134,3 @@ class ModelDetailDialog(QDialog):
         dlg = ToolDetailDialog(self.model_name, wire_name, parent=self)
         dlg.exec_()
         self._populate()
-

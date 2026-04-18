@@ -42,17 +42,22 @@ data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/checkpoints/*.
 Migration details:
 `docs/archvar_to_wire_registry_migration.md`
 
-Legacy source (kept for traceability during transition):
-
-```
-data/ArchVarJShaped/wires/<wire>/...
-```
-
 Current canonical refs:
-- `steve_default/default`
-- `steve_default/straight_tip`
-- `amplatz_super_stiff/default`
-- `universal_ii/default`
+- `steve_default/standard_j`
+- `steve_default/straight`
+- `steve_default/gentle`
+- `steve_default/tight_j`
+- `steve_default/strong_hook`
+- `amplatz_super_stiff/standard_j`
+- `amplatz_super_stiff/straight`
+- `amplatz_super_stiff/gentle`
+- `amplatz_super_stiff/tight_j`
+- `amplatz_super_stiff/strong_hook`
+- `universal_ii/standard_j`
+- `universal_ii/straight`
+- `universal_ii/gentle`
+- `universal_ii/tight_j`
+- `universal_ii/strong_hook`
 
 Historic layout:
 

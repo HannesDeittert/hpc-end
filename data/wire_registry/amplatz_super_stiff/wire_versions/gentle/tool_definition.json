@@ -1,0 +1,38 @@
+{
+  "description": "Gentle-curve tip variant of Amplatz Super Stiff.",
+  "model": "amplatz_super_stiff",
+  "name": "gentle",
+  "policy_available": false,
+  "spec": {
+    "beams_per_mm_straight": 0.5,
+    "beams_per_mm_tip": 1.4,
+    "collis_edges_per_mm_straight": 0.1,
+    "collis_edges_per_mm_tip": 2.0,
+    "color": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "length": 450.0,
+    "mass_density_straight": 2.1e-05,
+    "mass_density_tip": 2.1e-05,
+    "name": "amplatz_super_stiff_jshaped_gentle",
+    "poisson_ratio": 0.3,
+    "straight_inner_diameter": 0.0,
+    "straight_outer_diameter": 0.89,
+    "tip_angle": 0.608212337734984,
+    "tip_inner_diameter": 0.0,
+    "tip_outer_diameter": 0.7,
+    "tip_radius": 25.0,
+    "velocity_limit": [
+      35.0,
+      3.14
+    ],
+    "visu_edges_per_mm": 0.5,
+    "young_modulus_straight": 2436.0,
+    "young_modulus_tip": 424.0
+  },
+  "status": "defined",
+  "type": "procedural",
+  "version": "gentle"
+}

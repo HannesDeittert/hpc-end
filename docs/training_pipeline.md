@@ -25,18 +25,25 @@ Canonical wire registry layout:
 - `data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/agent.json`
 - `data/wire_registry/<model>/wire_versions/<version>/agents/<agent>/checkpoints/*.everl`
 
-Tools are referenced as `<model>/<version>`, e.g. `steve_default/default`.
+Tools are referenced as `<model>/<version>`, e.g. `steve_default/standard_j`.
 
-Current migrated ArchVar refs:
+Current wire-registry refs:
 
-- `steve_default/default`
-- `steve_default/straight_tip`
-- `amplatz_super_stiff/default`
-- `universal_ii/default`
-
-Legacy ArchVar source paths are retained for provenance only:
-
-- `data/ArchVarJShaped/wires/<wire>/...`
+- `steve_default/standard_j`
+- `steve_default/straight`
+- `steve_default/gentle`
+- `steve_default/tight_j`
+- `steve_default/strong_hook`
+- `amplatz_super_stiff/standard_j`
+- `amplatz_super_stiff/straight`
+- `amplatz_super_stiff/gentle`
+- `amplatz_super_stiff/tight_j`
+- `amplatz_super_stiff/strong_hook`
+- `universal_ii/standard_j`
+- `universal_ii/straight`
+- `universal_ii/gentle`
+- `universal_ii/tight_j`
+- `universal_ii/strong_hook`
 
 ## 3) Quick environment sanity checks
 
@@ -89,7 +96,7 @@ Recommended: run with `nohup` so it survives terminal closes/logouts.
 ```bash
 conda activate master-project
 bash scripts/train_paper.sh \
-  --tool steve_default/default \
+  --tool steve_default/standard_j \
   --name paper_standardj \
   --device cuda \
   --workers 16
@@ -122,7 +129,7 @@ kill -TERM "$(cat results/paper_runs/paper_standardj.pid)"
 ```bash
 conda activate master-project
 bash scripts/train_paper.sh \
-  --tool steve_default/default \
+  --tool steve_default/standard_j \
   --name paper_standardj_resume \
   --device cuda \
   --workers 16 \
@@ -143,7 +150,7 @@ Start training with TensorBoard logging enabled:
 ```bash
 conda activate master-project
 bash scripts/train_paper.sh \
-  --tool steve_default/default \
+  --tool steve_default/standard_j \
   --name paper_standardj \
   --device cuda \
   --workers 16 \

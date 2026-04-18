@@ -1,0 +1,38 @@
+{
+  "description": "Standard J-tip variant of stEVE Default.",
+  "model": "steve_default",
+  "name": "standard_j",
+  "policy_available": true,
+  "spec": {
+    "beams_per_mm_straight": 0.5,
+    "beams_per_mm_tip": 1.4,
+    "collis_edges_per_mm_straight": 0.1,
+    "collis_edges_per_mm_tip": 2.0,
+    "color": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "length": 450.0,
+    "mass_density_straight": 2.1e-05,
+    "mass_density_tip": 2.1e-05,
+    "name": "guidewire",
+    "poisson_ratio": 0.49,
+    "straight_inner_diameter": 0.0,
+    "straight_outer_diameter": 0.89,
+    "tip_angle": 1.2566370614359172,
+    "tip_inner_diameter": 0.0,
+    "tip_outer_diameter": 0.7,
+    "tip_radius": 12.1,
+    "velocity_limit": [
+      35.0,
+      3.14
+    ],
+    "visu_edges_per_mm": 0.5,
+    "young_modulus_straight": 80000.0,
+    "young_modulus_tip": 17000.0
+  },
+  "status": "trained",
+  "type": "procedural",
+  "version": "standard_j"
+}

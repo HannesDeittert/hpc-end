@@ -75,7 +75,11 @@ def list_agents(model_name: str, wire_name: str) -> List[AgentInfo]:
     for child in sorted(root.iterdir()):
         if not child.is_dir():
             continue
+        if child.name.startswith("__"):
+            continue
         metadata_path = child / "agent.json"
+        if not metadata_path.exists():
+            continue
         checkpoint = _latest_checkpoint(child)
         if metadata_path.exists():
             payload = _read_json(metadata_path)
@@ -105,8 +109,13 @@ def list_agent_refs() -> List[str]:
             if not root.exists():
                 continue
             for child in sorted(root.iterdir()):
-                if child.is_dir():
-                    refs.append(f"{model}/{wire}:{child.name}")
+                if not child.is_dir():
+                    continue
+                if child.name.startswith("__"):
+                    continue
+                if not (child / "agent.json").exists():
+                    continue
+                refs.append(f"{model}/{wire}:{child.name}")
     return refs
 
 

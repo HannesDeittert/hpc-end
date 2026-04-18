@@ -1,0 +1,38 @@
+{
+  "description": "Strong-hook tip variant of Universal II.",
+  "model": "universal_ii",
+  "name": "strong_hook",
+  "policy_available": false,
+  "spec": {
+    "beams_per_mm_straight": 0.5,
+    "beams_per_mm_tip": 1.4,
+    "collis_edges_per_mm_straight": 0.1,
+    "collis_edges_per_mm_tip": 2.0,
+    "color": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "length": 450.0,
+    "mass_density_straight": 2.1e-05,
+    "mass_density_tip": 2.1e-05,
+    "name": "abbott_universal_II_jshaped_strong_hook",
+    "poisson_ratio": 0.33,
+    "straight_inner_diameter": 0.0,
+    "straight_outer_diameter": 0.36,
+    "tip_angle": 2.5342180738957665,
+    "tip_inner_diameter": 0.0,
+    "tip_outer_diameter": 0.36,
+    "tip_radius": 6.0,
+    "velocity_limit": [
+      35.0,
+      3.14
+    ],
+    "visu_edges_per_mm": 0.5,
+    "young_modulus_straight": 8500.0,
+    "young_modulus_tip": 1800.0
+  },
+  "status": "defined",
+  "type": "procedural",
+  "version": "strong_hook"
+}

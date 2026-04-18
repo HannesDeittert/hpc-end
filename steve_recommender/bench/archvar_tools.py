@@ -75,7 +75,7 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         {
             **_jshaped_default_kwargs(),
             # Keep everything identical to jshaped_default, except a minimal bend radius.
-            "tip_radius": 0.1,
+            "tip_radius": 1000,
         },
         "ArchVar default J-shaped guidewire with minimal tip radius (0.1mm).",
     ),
