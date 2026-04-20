@@ -95,7 +95,14 @@ class HomeWidget(QWidget):
 
                 agents_path = wire_agents_dir(model, wire)
                 if agents_path.exists():
-                    for agent_dir in sorted(p.name for p in agents_path.iterdir() if p.is_dir()):
+                    valid_agents = sorted(
+                        p.name
+                        for p in agents_path.iterdir()
+                        if p.is_dir()
+                        and not p.name.startswith("__")
+                        and (p / "agent.json").exists()
+                    )
+                    for agent_dir in valid_agents:
                         agent_id = f"{model}/{wire}:{agent_dir}"
                         agent_item = QTreeWidgetItem([agent_dir, ""])
                         agent_item.setData(0, Qt.UserRole, agent_id)
@@ -114,6 +121,10 @@ class HomeWidget(QWidget):
                         )
 
                         self.tree.setItemWidget(agent_item, 1, btn)
+                    if not valid_agents:
+                        none_item = QTreeWidgetItem(["(no agents)", ""])
+                        none_item.setDisabled(True)
+                        wire_item.addChild(none_item)
                 else:
                     none_item = QTreeWidgetItem(["(no agents)", ""])
                     none_item.setDisabled(True)

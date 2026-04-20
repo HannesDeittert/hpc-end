@@ -136,7 +136,7 @@ if __name__ == "__main__":
         default=0.0003217978434614328,
     )
     parser.add_argument("--hidden", nargs="+", type=int, default=[400, 400, 400])
-    parser.add_argument("-en", "--embedder_nodes", type=int, default=700)
+    parser.add_argument("-en", "--embedder_nodes", type=int, default=900)
     parser.add_argument("-el", "--embedder_layers", type=int, default=1)
     parser.add_argument(
         "--results-folder",

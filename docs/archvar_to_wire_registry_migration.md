@@ -4,10 +4,10 @@
 
 | Legacy ref | Canonical ref |
 |---|---|
-| `ArchVarJShaped/JShaped_Default` | `steve_default/default` |
-| `ArchVarJShaped/JShaped_Default_StraightTip` | `steve_default/straight_tip` |
-| `ArchVarJShaped/j_shaped_AmplatzSuperStiff` | `amplatz_super_stiff/default` |
-| `ArchVarJShaped/j_shaped_UniversalII` | `universal_ii/default` |
+| `ArchVarJShaped/JShaped_Default` | `steve_default/standard_j` |
+| `ArchVarJShaped/JShaped_Default_StraightTip` | `steve_default/straight` |
+| `ArchVarJShaped/j_shaped_AmplatzSuperStiff` | `amplatz_super_stiff/standard_j` |
+| `ArchVarJShaped/j_shaped_UniversalII` | `universal_ii/standard_j` |
 
 ## Phases Executed
 
@@ -36,9 +36,9 @@ Expected parity:
 
 ## Rollback Notes
 
-Legacy source files remain in `data/ArchVarJShaped/wires/*`.
+Legacy source files were removed after parity validation.
 If rollback is required:
 
-1. revert runtime/storage path changes
-2. switch tool refs back to legacy names
-3. keep migrated `data/wire_registry/*` as read-only audit artifacts
+1. restore legacy data folders from version control or backup
+2. revert runtime/storage path changes
+3. switch tool refs back to legacy names

@@ -125,7 +125,11 @@ def _resolve_registry_candidate(spec: ComparisonCandidateSpec) -> ResolvedCandid
         available = []
         if agents_root.exists():
             available = sorted(
-                child.name for child in agents_root.iterdir() if child.is_dir()
+                child.name
+                for child in agents_root.iterdir()
+                if child.is_dir()
+                and not child.name.startswith("__")
+                and (child / "agent.json").exists()
             )
         available_hint = (
             f" Available agents for '{model}/{wire}': {', '.join(available)}."

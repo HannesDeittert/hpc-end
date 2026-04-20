@@ -1,105 +1,194 @@
 {
   "agents": {
-    "amplatz_super_stiff/default:archvar_amplatz_superstiff_best": {
-      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/agents/archvar_amplatz_superstiff_best/agent.json",
-      "agent_ref": "amplatz_super_stiff/default:archvar_amplatz_superstiff_best",
+    "amplatz_super_stiff/standard_j:archvar_amplatz_superstiff_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_superstiff_best/agent.json",
+      "agent_ref": "amplatz_super_stiff/standard_j:archvar_amplatz_superstiff_best",
       "checkpoint_exists": true,
-      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/agents/archvar_amplatz_superstiff_best/checkpoints/best_checkpoint.everl",
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_superstiff_best/checkpoints/best_checkpoint.everl",
       "model": "amplatz_super_stiff",
       "name": "archvar_amplatz_superstiff_best",
-      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/agents/archvar_amplatz_superstiff_best/checkpoints",
-      "wire": "default"
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_superstiff_best/checkpoints",
+      "wire": "standard_j"
     },
-    "steve_default/default:archvar_original_best": {
-      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/agents/archvar_original_best/agent.json",
-      "agent_ref": "steve_default/default:archvar_original_best",
+    "steve_default/standard_j:archvar_original_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_original_best/agent.json",
+      "agent_ref": "steve_default/standard_j:archvar_original_best",
       "checkpoint_exists": true,
-      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/agents/archvar_original_best/checkpoints/best_checkpoint.everl",
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_original_best/checkpoints/best_checkpoint.everl",
       "model": "steve_default",
       "name": "archvar_original_best",
-      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/agents/archvar_original_best/checkpoints",
-      "wire": "default"
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_original_best/checkpoints",
+      "wire": "standard_j"
     },
-    "steve_default/straight_tip:archvar_tipradius_min_best": {
-      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/agents/archvar_tipradius_min_best/agent.json",
-      "agent_ref": "steve_default/straight_tip:archvar_tipradius_min_best",
+    "universal_ii/standard_j:archvar_universalII_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalII_best/agent.json",
+      "agent_ref": "universal_ii/standard_j:archvar_universalII_best",
       "checkpoint_exists": true,
-      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/agents/archvar_tipradius_min_best/checkpoints/best_checkpoint.everl",
-      "model": "steve_default",
-      "name": "archvar_tipradius_min_best",
-      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/agents/archvar_tipradius_min_best/checkpoints",
-      "wire": "straight_tip"
-    },
-    "universal_ii/default:archvar_universalII_best": {
-      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/agents/archvar_universalII_best/agent.json",
-      "agent_ref": "universal_ii/default:archvar_universalII_best",
-      "checkpoint_exists": true,
-      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/agents/archvar_universalII_best/checkpoints/best_checkpoint.everl",
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalII_best/checkpoints/best_checkpoint.everl",
       "model": "universal_ii",
       "name": "archvar_universalII_best",
-      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/agents/archvar_universalII_best/checkpoints",
-      "wire": "default"
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalII_best/checkpoints",
+      "wire": "standard_j"
     }
   },
   "created_at_utc": "2026-04-17T13:56:51.445633+00:00",
   "models": {
     "amplatz_super_stiff": {
-      "description": "Amplatz Super Stiff J-shaped guidewire family.",
+      "description": "Amplatz Super Stiff J-shaped guidewire family with Straight/Gentle/Standard J/Tight J/Strong Hook variants.",
       "model_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/model_definition.json",
       "name": "amplatz_super_stiff",
       "wires_root": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions"
     },
     "steve_default": {
-      "description": "stEVE baseline J-shaped guidewire family with default and straight-tip variants.",
+      "description": "stEVE baseline J-shaped guidewire family with Straight/Gentle/Standard J/Tight J/Strong Hook variants.",
       "model_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/model_definition.json",
       "name": "steve_default",
       "wires_root": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions"
     },
     "universal_ii": {
-      "description": "Universal II J-shaped guidewire family.",
+      "description": "Universal II J-shaped guidewire family with Straight/Gentle/Standard J/Tight J/Strong Hook variants.",
       "model_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/model_definition.json",
       "name": "universal_ii",
       "wires_root": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions"
     }
   },
   "schema_version": 1,
-  "updated_at_utc": "2026-04-17T14:22:10.978869+00:00",
+  "updated_at_utc": "2026-04-18T11:16:51.636506+00:00",
   "wires": {
-    "amplatz_super_stiff/default": {
-      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/agents",
+    "amplatz_super_stiff/gentle": {
+      "agents_dir": null,
       "model": "amplatz_super_stiff",
-      "name": "default",
-      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/tool_definition.json",
-      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default/tool.py",
-      "tool_ref": "amplatz_super_stiff/default",
-      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/default"
+      "name": "gentle",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/tool.py",
+      "tool_ref": "amplatz_super_stiff/gentle",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle"
     },
-    "steve_default/default": {
-      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/agents",
+    "amplatz_super_stiff/standard_j": {
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents",
+      "model": "amplatz_super_stiff",
+      "name": "standard_j",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/tool.py",
+      "tool_ref": "amplatz_super_stiff/standard_j",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j"
+    },
+    "amplatz_super_stiff/straight": {
+      "agents_dir": null,
+      "model": "amplatz_super_stiff",
+      "name": "straight",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight/tool.py",
+      "tool_ref": "amplatz_super_stiff/straight",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight"
+    },
+    "amplatz_super_stiff/strong_hook": {
+      "agents_dir": null,
+      "model": "amplatz_super_stiff",
+      "name": "strong_hook",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook/tool.py",
+      "tool_ref": "amplatz_super_stiff/strong_hook",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook"
+    },
+    "amplatz_super_stiff/tight_j": {
+      "agents_dir": null,
+      "model": "amplatz_super_stiff",
+      "name": "tight_j",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j/tool.py",
+      "tool_ref": "amplatz_super_stiff/tight_j",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j"
+    },
+    "steve_default/gentle": {
+      "agents_dir": null,
       "model": "steve_default",
-      "name": "default",
-      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/tool_definition.json",
-      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default/tool.py",
-      "tool_ref": "steve_default/default",
-      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/default"
+      "name": "gentle",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle/tool.py",
+      "tool_ref": "steve_default/gentle",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle"
     },
-    "steve_default/straight_tip": {
-      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/agents",
+    "steve_default/standard_j": {
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents",
       "model": "steve_default",
-      "name": "straight_tip",
-      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/tool_definition.json",
-      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip/tool.py",
-      "tool_ref": "steve_default/straight_tip",
-      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight_tip"
+      "name": "standard_j",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/tool.py",
+      "tool_ref": "steve_default/standard_j",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j"
     },
-    "universal_ii/default": {
-      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/agents",
+    "steve_default/straight": {
+      "agents_dir": null,
+      "model": "steve_default",
+      "name": "straight",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight/tool.py",
+      "tool_ref": "steve_default/straight",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight"
+    },
+    "steve_default/strong_hook": {
+      "agents_dir": null,
+      "model": "steve_default",
+      "name": "strong_hook",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook/tool.py",
+      "tool_ref": "steve_default/strong_hook",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook"
+    },
+    "steve_default/tight_j": {
+      "agents_dir": null,
+      "model": "steve_default",
+      "name": "tight_j",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/tool.py",
+      "tool_ref": "steve_default/tight_j",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j"
+    },
+    "universal_ii/gentle": {
+      "agents_dir": null,
       "model": "universal_ii",
-      "name": "default",
-      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/tool_definition.json",
-      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/tool.py",
-      "tool_ref": "universal_ii/default",
-      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default"
+      "name": "gentle",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle/tool.py",
+      "tool_ref": "universal_ii/gentle",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle"
+    },
+    "universal_ii/standard_j": {
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents",
+      "model": "universal_ii",
+      "name": "standard_j",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/tool.py",
+      "tool_ref": "universal_ii/standard_j",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j"
+    },
+    "universal_ii/straight": {
+      "agents_dir": null,
+      "model": "universal_ii",
+      "name": "straight",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/tool.py",
+      "tool_ref": "universal_ii/straight",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight"
+    },
+    "universal_ii/strong_hook": {
+      "agents_dir": null,
+      "model": "universal_ii",
+      "name": "strong_hook",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/tool.py",
+      "tool_ref": "universal_ii/strong_hook",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook"
+    },
+    "universal_ii/tight_j": {
+      "agents_dir": null,
+      "model": "universal_ii",
+      "name": "tight_j",
+      "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j/tool_definition.json",
+      "tool_py_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j/tool.py",
+      "tool_ref": "universal_ii/tight_j",
+      "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j"
     }
   }
 }

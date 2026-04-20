@@ -1,6 +1,6 @@
 {
-  "default_version": "default",
-  "description": "Universal II J-shaped guidewire family.",
+  "default_version": "standard_j",
+  "description": "Universal II J-shaped guidewire family with Straight/Gentle/Standard J/Tight J/Strong Hook variants.",
   "display_name": "Universal II",
   "family": "j_shaped_guidewire",
   "name": "universal_ii",
@@ -20,6 +20,10 @@
     "migrated_at_utc": "2026-04-17T14:21:48.061549+00:00"
   },
   "wire_versions": [
-    "default"
+    "straight",
+    "gentle",
+    "standard_j",
+    "tight_j",
+    "strong_hook"
   ]
 }

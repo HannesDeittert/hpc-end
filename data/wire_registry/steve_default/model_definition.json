@@ -1,6 +1,6 @@
 {
-  "default_version": "default",
-  "description": "stEVE baseline J-shaped guidewire family with default and straight-tip variants.",
+  "default_version": "standard_j",
+  "description": "stEVE baseline J-shaped guidewire family with Straight/Gentle/Standard J/Tight J/Strong Hook variants.",
   "display_name": "stEVE Default",
   "family": "j_shaped_guidewire",
   "name": "steve_default",
@@ -21,7 +21,10 @@
     "migrated_at_utc": "2026-04-17T14:21:48.061541+00:00"
   },
   "wire_versions": [
-    "default",
-    "straight_tip"
+    "straight",
+    "gentle",
+    "standard_j",
+    "tight_j",
+    "strong_hook"
   ]
 }

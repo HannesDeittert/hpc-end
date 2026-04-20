@@ -1,8 +1,0 @@
-{
-  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/agents/archvar_universalII_best/checkpoints/best_checkpoint.everl",
-  "name": "archvar_universalII_best",
-  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/default/agents/archvar_universalII_best/checkpoints",
-  "source_agent_json": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/j_shaped_UniversalII/agents/archvar_universalII_best/agent.json",
-  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/ArchVarJShaped/wires/j_shaped_UniversalII/agents/archvar_universalII_best/best_checkpoint.everl",
-  "tool": "universal_ii/default"
-}
