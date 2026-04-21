@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "anatomies": [
+    {
+      "record_id": "Tree_00",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_00/description.json"
+    },
+    {
+      "record_id": "Tree_01",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_01/description.json"
+    },
+    {
+      "record_id": "Tree_02",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_02/description.json"
+    },
+    {
+      "record_id": "Tree_03",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_03/description.json"
+    },
+    {
+      "record_id": "Tree_04",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_04/description.json"
+    },
+    {
+      "record_id": "Tree_05",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_05/description.json"
+    },
+    {
+      "record_id": "Tree_06",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_06/description.json"
+    },
+    {
+      "record_id": "Tree_07",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_07/description.json"
+    },
+    {
+      "record_id": "Tree_08",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_08/description.json"
+    },
+    {
+      "record_id": "Tree_09",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_09/description.json"
+    },
+    {
+      "record_id": "Tree_10",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_10/description.json"
+    },
+    {
+      "record_id": "Tree_11",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_11/description.json"
+    },
+    {
+      "record_id": "Tree_12",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_12/description.json"
+    },
+    {
+      "record_id": "Tree_13",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_13/description.json"
+    },
+    {
+      "record_id": "Tree_14",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_14/description.json"
+    },
+    {
+      "record_id": "Tree_15",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_15/description.json"
+    },
+    {
+      "record_id": "Tree_16",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_16/description.json"
+    },
+    {
+      "record_id": "Tree_17",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_17/description.json"
+    },
+    {
+      "record_id": "Tree_18",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_18/description.json"
+    },
+    {
+      "record_id": "Tree_19",
+      "anatomy_type": "aortic_arch",
+      "created_at": "",
+      "description_path": "anatomies/Tree_19/description.json"
+    }
+  ]
+}

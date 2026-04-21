@@ -123,6 +123,18 @@ if __name__ == "__main__":
     parser.add_argument("--explore-steps-between-eval", type=int, default=None)
     parser.add_argument("--explore-episodes-between-updates", type=int, default=None)
     parser.add_argument(
+        "--train-max-steps",
+        type=int,
+        default=None,
+        help="Override training episode cap. Lennart archive example uses 150.",
+    )
+    parser.add_argument(
+        "--eval-max-steps",
+        type=int,
+        default=None,
+        help="Override evaluation episode cap. Lennart archive example uses 450.",
+    )
+    parser.add_argument(
         "--step-timeout",
         type=float,
         default=None,
@@ -172,6 +184,8 @@ if __name__ == "__main__":
         "BATCH_SIZE": BATCH_SIZE,
         "UPDATE_PER_EXPLORE_STEP": UPDATE_PER_EXPLORE_STEP,
         "TOOL": args.tool,
+        "TRAIN_MAX_STEPS": args.train_max_steps,
+        "EVAL_MAX_STEPS": args.eval_max_steps,
     }
 
     (
@@ -243,8 +257,25 @@ if __name__ == "__main__":
     intervention = build_archvar_intervention(device=device)
     intervention2 = deepcopy(intervention)
 
-    env_train = BenchEnv(intervention=intervention, mode="train", visualisation=False)
-    env_eval = BenchEnv(intervention=intervention2, mode="eval", visualisation=False)
+    env_train_kwargs = {}
+    env_eval_kwargs = {}
+    if args.train_max_steps is not None:
+        env_train_kwargs["n_max_steps"] = args.train_max_steps
+    if args.eval_max_steps is not None:
+        env_eval_kwargs["n_max_steps"] = args.eval_max_steps
+
+    env_train = BenchEnv(
+        intervention=intervention,
+        mode="train",
+        visualisation=False,
+        **env_train_kwargs,
+    )
+    env_eval = BenchEnv(
+        intervention=intervention2,
+        mode="eval",
+        visualisation=False,
+        **env_eval_kwargs,
+    )
 
     if args.step_timeout is not None:
         for env in (env_train, env_eval):

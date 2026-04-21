@@ -1,0 +1,20 @@
+{
+  "anatomy_type": "aortic_arch",
+  "arch_type": "V",
+  "seed": 1015,
+  "rotation_yzx_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "scaling_xyzd": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "omit_axis": null,
+  "simulation_mesh_path": "mesh/simulationmesh.obj",
+  "visualization_mesh_path": "mesh/visumesh.obj",
+  "centerline_bundle_path": null
+}

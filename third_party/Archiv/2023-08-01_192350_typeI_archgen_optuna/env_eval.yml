@@ -1,0 +1,357 @@
+_class: eve.env.Env
+_id: 140265176739792
+intervention:
+    _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+    _id: 140266179406096
+    vessel_tree:
+        _class: eve.intervention.vesseltree.aorticarchrandom.AorticArchRandom
+        _id: 140266179405136
+        scale_width_array:
+        - 0.7
+        - 0.71
+        - 0.72
+        - 0.73
+        - 0.74
+        - 0.75
+        - 0.76
+        - 0.77
+        - 0.78
+        - 0.79
+        - 0.7999999999999999
+        - 0.8099999999999999
+        - 0.82
+        - 0.83
+        - 0.84
+        - 0.85
+        - 0.86
+        - 0.87
+        - 0.88
+        - 0.89
+        - 0.9
+        - 0.91
+        - 0.9199999999999999
+        - 0.9299999999999999
+        - 0.94
+        - 0.95
+        - 0.96
+        - 0.97
+        - 0.98
+        - 0.99
+        - 1.0
+        - 1.01
+        - 1.02
+        - 1.03
+        - 1.04
+        - 1.05
+        - 1.06
+        - 1.07
+        - 1.08
+        - 1.09
+        - 1.1
+        - 1.11
+        - 1.12
+        - 1.1300000000000001
+        - 1.1400000000000001
+        - 1.15
+        - 1.1600000000000001
+        - 1.17
+        - 1.1800000000000002
+        - 1.19
+        - 1.2000000000000002
+        - 1.21
+        - 1.2200000000000002
+        - 1.23
+        - 1.2400000000000002
+        - 1.25
+        - 1.26
+        - 1.27
+        - 1.28
+        - 1.29
+        - 1.3
+        scale_heigth_array:
+        - 0.7
+        - 0.71
+        - 0.72
+        - 0.73
+        - 0.74
+        - 0.75
+        - 0.76
+        - 0.77
+        - 0.78
+        - 0.79
+        - 0.7999999999999999
+        - 0.8099999999999999
+        - 0.82
+        - 0.83
+        - 0.84
+        - 0.85
+        - 0.86
+        - 0.87
+        - 0.88
+        - 0.89
+        - 0.9
+        - 0.91
+        - 0.9199999999999999
+        - 0.9299999999999999
+        - 0.94
+        - 0.95
+        - 0.96
+        - 0.97
+        - 0.98
+        - 0.99
+        - 1.0
+        - 1.01
+        - 1.02
+        - 1.03
+        - 1.04
+        - 1.05
+        - 1.06
+        - 1.07
+        - 1.08
+        - 1.09
+        - 1.1
+        - 1.11
+        - 1.12
+        - 1.1300000000000001
+        - 1.1400000000000001
+        - 1.15
+        - 1.1600000000000001
+        - 1.17
+        - 1.1800000000000002
+        - 1.19
+        - 1.2000000000000002
+        - 1.21
+        - 1.2200000000000002
+        - 1.23
+        - 1.2400000000000002
+        - 1.25
+        - 1.26
+        - 1.27
+        - 1.28
+        - 1.29
+        - 1.3
+        scale_diameter_array:
+        - 0.85
+        arch_types_filter:
+        - I
+        seeds_vessel: null
+        rotate_y_deg_array:
+        - 0.0
+        rotate_z_deg_array:
+        - 0.0
+        rotate_x_deg_array:
+        - 0.0
+        omit_axis: null
+        n_coordinate_space_iters: 5
+        episodes_between_change: 1
+    devices:
+    -   _class: eve.intervention.device.jshaped.JShaped
+        _id: 140265176737008
+        name: guidewire
+        velocity_limit: !!python/tuple
+        - 35
+        - 3.14
+        length: 450
+        tip_radius: 12.1
+        tip_angle: 1.2566370614359172
+        tip_outer_diameter: 0.7
+        tip_inner_diameter: 0.0
+        straight_outer_diameter: 0.89
+        straight_inner_diameter: 0.0
+        poisson_ratio: 0.49
+        young_modulus_tip: 17000.0
+        young_modulus_straight: 80000.0
+        mass_density_tip: 2.1e-05
+        mass_density_straight: 2.1e-05
+        visu_edges_per_mm: 0.5
+        collis_edges_per_mm_tip: 2
+        collis_edges_per_mm_straight: 0.1
+        beams_per_mm_tip: 1.4
+        beams_per_mm_straight: 0.5
+        color: !!python/tuple
+        - 0.0
+        - 0.0
+        - 0.0
+    simulation:
+        _class: eve.intervention.simulation.simulationmp.SimulationMP
+        _id: 140266155614848
+        simulation:
+            _class: eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter
+            _id: 140265176735904
+            friction: 0.1
+            dt_simulation: 0.006
+        step_timeout: 2
+        restart_n_resets: 200
+    fluoroscopy:
+        _class: eve.intervention.fluoroscopy.trackingonly.TrackingOnly
+        _id: 140265176739744
+        simulation:
+            _class: eve.intervention.simulation.simulationmp.SimulationMP
+            _id: 140266155614848
+        vessel_tree:
+            _class: eve.intervention.vesseltree.aorticarchrandom.AorticArchRandom
+            _id: 140266179405136
+        image_frequency: 7.5
+        image_rot_zx:
+        - 25
+        - 0
+        image_center:
+        - 0
+        - 0
+        - 0
+        field_of_view: null
+    target:
+        _class: eve.intervention.target.centerlinerandom.CenterlineRandom
+        _id: 140265176736528
+        vessel_tree:
+            _class: eve.intervention.vesseltree.aorticarchrandom.AorticArchRandom
+            _id: 140266179405136
+        fluoroscopy:
+            _class: eve.intervention.fluoroscopy.trackingonly.TrackingOnly
+            _id: 140265176739744
+        threshold: 5
+        branches:
+        - lcca
+        - rcca
+        - lsa
+        - rsa
+        - bct
+        - co
+        min_distance_between_possible_targets: null
+    stop_device_at_tree_end: true
+    normalize_action: false
+observation:
+    _class: eve.observation.obsdict.ObsDict
+    _id: 140266155615808
+    observations:
+        tracking:
+            _class: eve.observation.wrapper.memory.Memory
+            _id: 140265176737200
+            wrapped_obs:
+                _class: eve.observation.wrapper.normalizetracking2depisode.NormalizeTracking2DEpisode
+                _id: 140265176738352
+                wrapped_obs:
+                    _class: eve.observation.tracking2d.Tracking2D
+                    _id: 140265176737344
+                    intervention:
+                        _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+                        _id: 140266179406096
+                    n_points: 3
+                    resolution: 2
+                    name: tracking2d
+                intervention:
+                    _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+                    _id: 140266179406096
+                name: tracking2d
+            n_steps: 2
+            reset_mode: 0
+            name: tracking2d
+        target:
+            _class: eve.observation.wrapper.normalizetracking2depisode.NormalizeTracking2DEpisode
+            _id: 140265176739216
+            wrapped_obs:
+                _class: eve.observation.target2d.Target2D
+                _id: 140265176737104
+                intervention:
+                    _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+                    _id: 140266179406096
+                interim_target: null
+                name: target2d
+            intervention:
+                _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+                _id: 140266179406096
+            name: target2d
+        last_action:
+            _class: eve.observation.wrapper.normalize.Normalize
+            _id: 140266155615232
+            wrapped_obs:
+                _class: eve.observation.lastaction.LastAction
+                _id: 140266155617872
+                intervention:
+                    _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+                    _id: 140266179406096
+                name: last_action
+            name: last_action
+    name: observation_dict
+reward:
+    _class: eve.reward.combination.Combination
+    _id: 140266155617536
+    rewards:
+    -   _class: eve.reward.targetreached.TargetReached
+        _id: 140266155618016
+        intervention:
+            _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+            _id: 140266179406096
+        factor: 1.0
+        interim_target:
+            _class: eve.interimtarget.dummy.Dummy
+            _id: 140266155615184
+        final_only_after_all_interim: false
+    -   _class: eve.reward.pathlengthdelta.PathLengthDelta
+        _id: 140266155616768
+        pathfinder:
+            _class: eve.pathfinder.bruteforcebfs.BruteForceBFS
+            _id: 140265176737488
+            intervention:
+                _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+                _id: 140266179406096
+        factor: 0.001
+    -   _class: eve.reward.step.Step
+        _id: 140266155615280
+        factor: -0.005
+terminal:
+    _class: eve.terminal.targetreached.TargetReached
+    _id: 140266155618160
+    intervention:
+        _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+        _id: 140266179406096
+truncation:
+    _class: eve.truncation.maxsteps.MaxSteps
+    _id: 140266155617776
+    max_steps: 450
+info:
+    _class: eve.info.combination.Combination
+    _id: 140266155616240
+    infos:
+    -   _class: eve.info.targetreached.TargetReached
+        _id: 140266155617632
+        intervention:
+            _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+            _id: 140266179406096
+        name: success
+    -   _class: eve.info.pathratio.PathRatio
+        _id: 140266155616432
+        pathfinder:
+            _class: eve.pathfinder.bruteforcebfs.BruteForceBFS
+            _id: 140265176737488
+        name: path_ratio
+    -   _class: eve.info.steps.Steps
+        _id: 140266155615712
+        name: steps
+    -   _class: eve.info.avgtranslationspeed.AverageTranslationSpeed
+        _id: 140266155616480
+        intervention:
+            _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+            _id: 140266179406096
+        name: average translation speed
+    -   _class: eve.info.trajectorylength.TrajectoryLength
+        _id: 140266155617200
+        intervention:
+            _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+            _id: 140266179406096
+        name: trajectory length
+start:
+    _class: eve.start.insertionpoint.InsertionPoint
+    _id: 140265176739168
+    intervention:
+        _class: eve.intervention.monoplanestatic.MonoPlaneStatic
+        _id: 140266179406096
+pathfinder:
+    _class: eve.pathfinder.bruteforcebfs.BruteForceBFS
+    _id: 140265176737488
+interim_target:
+    _class: eve.interimtarget.dummy.Dummy
+    _id: 140266155614656
+visualisation:
+    _class: eve.visualisation.dummy.Dummy
+    _id: 140266155617680
