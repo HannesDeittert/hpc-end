@@ -368,6 +368,7 @@ def run_single_trial(
         runtime,
         execution=execution,
         trial_index=trial_index,
+        hidden_window=frame_callback is not None,
     )
     env = build_single_trial_env(
         runtime,
