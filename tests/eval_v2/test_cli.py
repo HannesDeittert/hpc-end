@@ -6,6 +6,7 @@ from pathlib import Path
 
 from steve_recommender.eval_v2.cli import run_cli
 from steve_recommender.eval_v2.models import (
+    AgentRef,
     AnatomyBranch,
     AorticArchAnatomy,
     BranchIndexTarget,
@@ -331,6 +332,66 @@ class CliAdapterTests(unittest.TestCase):
         self.assertEqual(candidate.policy.checkpoint_path, Path("/tmp/manual_policy.everl"))
         self.assertEqual(candidate.policy.source, "explicit")
         self.assertEqual(candidate.policy.trained_on_wire, service.cross_wire)
+
+    def test_run_command_can_select_policy_by_agent_ref_when_names_collide(self) -> None:
+        class _AmbiguousServiceStub(_ServiceStub):
+            def __init__(self) -> None:
+                super().__init__()
+                self.same_name_same_wire = PolicySpec(
+                    name="shared_policy",
+                    checkpoint_path=Path("/tmp/shared_policy_registry.everl"),
+                    trained_on_wire=self.execution_wire,
+                    source="registry",
+                    registry_agent=AgentRef(wire=self.execution_wire, agent="registry_agent"),
+                )
+                self.same_name_explicit = PolicySpec(
+                    name="shared_policy",
+                    checkpoint_path=Path("/tmp/shared_policy_explicit.everl"),
+                    trained_on_wire=self.execution_wire,
+                    source="explicit",
+                    registry_agent=AgentRef(wire=self.execution_wire, agent="explicit_agent"),
+                )
+
+            def list_registry_policies(self, *, execution_wire=None):
+                _ = execution_wire
+                return (self.same_name_same_wire,)
+
+            def list_explicit_policies(self, *, execution_wire=None):
+                _ = execution_wire
+                return (self.same_name_explicit,)
+
+            def resolve_policy_from_agent_ref(self, agent_ref):
+                if agent_ref == self.same_name_explicit.registry_agent:
+                    return self.same_name_explicit
+                if agent_ref == self.same_name_same_wire.registry_agent:
+                    return self.same_name_same_wire
+                raise KeyError(agent_ref)
+
+        service = _AmbiguousServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-agent-ref",
+                "steve_default/standard_j:explicit_agent",
+                "--target-mode",
+                "manual",
+                "--manual-target",
+                "1.0,2.0,3.0",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(service.jobs), 1)
+        self.assertEqual(service.jobs[0].candidates[0].policy, service.same_name_explicit)
+        self.assertIn("summaries=1", stdout.getvalue())
 
     def test_run_command_builds_visualization_execution_settings(self) -> None:
         service = _ServiceStub()

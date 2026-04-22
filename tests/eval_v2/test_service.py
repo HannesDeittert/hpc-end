@@ -3,6 +3,9 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+import csv
+import json
+import tempfile
 
 from steve_recommender.eval_v2.models import (
     AnatomyBranch,
@@ -174,6 +177,26 @@ class _PolicyDiscoveryStub:
         raise KeyError(agent_ref)
 
 
+class _ExplicitPolicyDiscoveryStub:
+    def __init__(self, explicit_policies: tuple[PolicySpec, ...]) -> None:
+        self._explicit_policies = explicit_policies
+
+    def list_explicit_policies(self, *, execution_wire=None):
+        if execution_wire is None:
+            return self._explicit_policies
+        return tuple(
+            policy
+            for policy in self._explicit_policies
+            if policy.trained_on_wire == execution_wire
+        )
+
+    def resolve_policy_from_agent_ref(self, agent_ref):
+        for policy in self._explicit_policies:
+            if policy.registry_agent == agent_ref:
+                return policy
+        raise KeyError(agent_ref)
+
+
 class _TargetDiscoveryStub:
     def __init__(self) -> None:
         self._branches = (
@@ -215,7 +238,14 @@ class _RunnerStub:
         self.report = report
         self.jobs: list[EvaluationJob] = []
 
-    def run_evaluation_job(self, job: EvaluationJob) -> EvaluationReport:
+    def run_evaluation_job(
+        self,
+        job: EvaluationJob,
+        *,
+        frame_callback=None,
+        progress_callback=None,
+    ) -> EvaluationReport:
+        _ = frame_callback, progress_callback
         self.jobs.append(job)
         return self.report
 
@@ -254,8 +284,17 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                 intervention=intervention,
             )
 
-        def trial_runner(*, runtime, trial_index, seed, execution, scoring):
-            _ = runtime, execution, scoring
+        def trial_runner(
+            *,
+            runtime,
+            trial_index,
+            seed,
+            execution,
+            scoring,
+            frame_callback=None,
+            progress_callback=None,
+        ):
+            _ = runtime, execution, scoring, frame_callback, progress_callback
             trial_runner_calls.append((trial_index, seed))
             if trial_index == 0:
                 return _trial(
@@ -351,8 +390,17 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                 intervention=intervention,
             )
 
-        def failing_trial_runner(*, runtime, trial_index, seed, execution, scoring):
-            _ = runtime, trial_index, seed, execution, scoring
+        def failing_trial_runner(
+            *,
+            runtime,
+            trial_index,
+            seed,
+            execution,
+            scoring,
+            frame_callback=None,
+            progress_callback=None,
+        ):
+            _ = runtime, trial_index, seed, execution, scoring, frame_callback, progress_callback
             raise RuntimeError("boom")
 
         runner = LocalEvaluationRunner(
@@ -365,6 +413,77 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
 
         self.assertTrue(play_policy.closed)
         self.assertTrue(intervention.closed)
+
+    def test_run_evaluation_job_forwards_frame_and_progress_callbacks_to_trial_runner(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+        job = EvaluationJob(
+            name="job_callbacks",
+            scenarios=(scenario,),
+            candidates=(candidate,),
+            execution=ExecutionPlan(trials_per_candidate=1, base_seed=300, policy_device="cpu"),
+        )
+
+        play_policy = _Closable()
+        intervention = _Closable()
+        frame_events: list[object] = []
+        progress_events: list[str] = []
+
+        def runtime_factory(*, candidate, scenario, simulation=None, registry_path=None, policy_device="cpu"):
+            _ = candidate, scenario, simulation, registry_path, policy_device
+            return _RuntimeStub(
+                candidate=candidate,
+                scenario=scenario,
+                play_policy=play_policy,
+                intervention=intervention,
+            )
+
+        def trial_runner(
+            *,
+            runtime,
+            trial_index,
+            seed,
+            execution,
+            scoring,
+            frame_callback=None,
+            progress_callback=None,
+        ):
+            _ = runtime, trial_index, seed, execution, scoring
+            if frame_callback is not None:
+                frame_callback("frame")
+            if progress_callback is not None:
+                progress_callback("progress")
+            return _trial(
+                scenario_name="scenario_a",
+                candidate_name="candidate_a",
+                execution_wire=execution_wire,
+                policy=policy,
+                trial_index=0,
+                seed=300,
+                success=True,
+                score_total=0.5,
+                steps_total=5,
+                steps_to_success=5,
+                tip_speed_max_mm_s=10.0,
+                force_available_for_score=False,
+            )
+
+        runner = LocalEvaluationRunner(
+            runtime_factory=runtime_factory,
+            trial_runner=trial_runner,
+        )
+
+        report = runner.run_evaluation_job(
+            job,
+            frame_callback=frame_events.append,
+            progress_callback=progress_events.append,
+        )
+
+        self.assertEqual(report.job_name, "job_callbacks")
+        self.assertEqual(frame_events, ["frame"])
+        self.assertEqual(progress_events, ["runtime_prepare scenario=scenario_a candidate=candidate_a", "progress"])
 
 
 class DefaultEvaluationServiceTests(unittest.TestCase):
@@ -393,11 +512,13 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
             registry_policies=(same_wire_policy, cross_wire_policy),
             explicit_policies=(explicit_policy,),
         )
+        explicit_policy_discovery = _ExplicitPolicyDiscoveryStub((explicit_policy,))
         target_discovery = _TargetDiscoveryStub()
         runner = _RunnerStub(report)
         service = DefaultEvaluationService(
             anatomy_discovery=anatomy_discovery,
             policy_discovery=policy_discovery,
+            explicit_policy_discovery=explicit_policy_discovery,
             target_discovery=target_discovery,
             evaluation_runner=runner,
         )
@@ -441,8 +562,276 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
         )
         returned_report = service.run_evaluation_job(job)
 
-        self.assertIs(returned_report, report)
+        self.assertEqual(returned_report.job_name, report.job_name)
+        self.assertIsNotNone(returned_report.artifacts)
+        assert returned_report.artifacts is not None
+        self.assertTrue(returned_report.artifacts.output_dir.exists())
         self.assertEqual(runner.jobs, [job])
+
+    def test_run_evaluation_job_writes_artifacts_to_output_root(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+        report = EvaluationReport(
+            job_name="job_outputs",
+            generated_at="2026-04-20T12:30:00+00:00",
+            summaries=(
+                CandidateSummary(
+                    scenario_name="scenario_a",
+                    candidate_name="candidate_a",
+                    execution_wire=execution_wire,
+                    trained_on_wire=execution_wire,
+                    trial_count=1,
+                    success_rate=1.0,
+                    score_mean=0.9,
+                    score_std=0.0,
+                    steps_total_mean=3.0,
+                    steps_to_success_mean=1.0,
+                    tip_speed_max_mean_mm_s=12.5,
+                    wall_force_max_mean=None,
+                    wall_force_max_mean_newton=None,
+                    force_available_rate=0.0,
+                ),
+            ),
+            trials=(),
+        )
+
+        anatomy_discovery = _AnatomyDiscoveryStub((scenario.anatomy,))
+        policy_discovery = _PolicyDiscoveryStub(
+            execution_wires=(execution_wire,),
+            startable_wires=(execution_wire,),
+            registry_policies=(policy,),
+            explicit_policies=(),
+        )
+        explicit_policy_discovery = _ExplicitPolicyDiscoveryStub(())
+        target_discovery = _TargetDiscoveryStub()
+        runner = _RunnerStub(report)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp) / "outputs"
+            job = EvaluationJob(
+                name="job_outputs",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                output_root=output_root,
+            )
+            service = DefaultEvaluationService(
+                anatomy_discovery=anatomy_discovery,
+                policy_discovery=policy_discovery,
+                explicit_policy_discovery=explicit_policy_discovery,
+                target_discovery=target_discovery,
+                evaluation_runner=runner,
+            )
+
+            returned_report = service.run_evaluation_job(job)
+
+            artifacts = returned_report.artifacts
+            self.assertIsNotNone(artifacts)
+            assert artifacts is not None
+            self.assertTrue(artifacts.output_dir.exists())
+            self.assertTrue(artifacts.summary_csv_path.exists())
+            self.assertTrue(artifacts.report_json_path.exists())
+            self.assertTrue(artifacts.report_markdown_path.exists())
+
+            self.assertEqual(artifacts.output_dir, output_root / "job_outputs")
+
+            with artifacts.summary_csv_path.open("r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["candidate_name"], "candidate_a")
+
+            payload = json.loads(artifacts.report_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["job_name"], "job_outputs")
+            self.assertEqual(len(payload["summaries"]), 1)
+
+    def test_list_historical_reports_discovers_metadata_from_output_root(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_archive")
+        report = EvaluationReport(
+            job_name="archive_job",
+            generated_at="2026-04-21T10:00:00+00:00",
+            summaries=(
+                CandidateSummary(
+                    scenario_name="scenario_archive",
+                    candidate_name="candidate_a",
+                    execution_wire=execution_wire,
+                    trained_on_wire=execution_wire,
+                    trial_count=1,
+                    success_rate=1.0,
+                    score_mean=0.8,
+                    score_std=0.0,
+                    steps_total_mean=3.0,
+                    steps_to_success_mean=2.0,
+                    tip_speed_max_mean_mm_s=15.0,
+                    wall_force_max_mean=0.2,
+                    wall_force_max_mean_newton=0.1,
+                    force_available_rate=1.0,
+                ),
+            ),
+            trials=(),
+        )
+
+        anatomy_discovery = _AnatomyDiscoveryStub((scenario.anatomy,))
+        policy_discovery = _PolicyDiscoveryStub(
+            execution_wires=(execution_wire,),
+            startable_wires=(execution_wire,),
+            registry_policies=(policy,),
+            explicit_policies=(),
+        )
+        explicit_policy_discovery = _ExplicitPolicyDiscoveryStub(())
+        target_discovery = _TargetDiscoveryStub()
+        runner = _RunnerStub(report)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp) / "outputs"
+            job = EvaluationJob(
+                name="archive_job",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                output_root=output_root,
+            )
+            service = DefaultEvaluationService(
+                anatomy_discovery=anatomy_discovery,
+                policy_discovery=policy_discovery,
+                explicit_policy_discovery=explicit_policy_discovery,
+                target_discovery=target_discovery,
+                evaluation_runner=runner,
+            )
+
+            service.run_evaluation_job(job)
+            summaries = service.list_historical_reports(output_root=output_root)
+
+        self.assertEqual(len(summaries), 1)
+        summary = summaries[0]
+        self.assertEqual(summary.job_name, "archive_job")
+        self.assertEqual(summary.generated_at, "2026-04-21T10:00:00+00:00")
+        self.assertIn("scenario_archive", summary.anatomy)
+        self.assertEqual(summary.tested_wires, ("steve_default/standard_j",))
+        self.assertTrue(summary.report_json_path.name == "report.json")
+
+    def test_load_report_from_disk_reconstructs_full_evaluation_report(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_load")
+        report = EvaluationReport(
+            job_name="load_job",
+            generated_at="2026-04-21T11:00:00+00:00",
+            summaries=(
+                CandidateSummary(
+                    scenario_name="scenario_load",
+                    candidate_name="candidate_a",
+                    execution_wire=execution_wire,
+                    trained_on_wire=execution_wire,
+                    trial_count=1,
+                    success_rate=1.0,
+                    score_mean=0.8,
+                    score_std=0.0,
+                    steps_total_mean=3.0,
+                    steps_to_success_mean=2.0,
+                    tip_speed_max_mean_mm_s=15.0,
+                    wall_force_max_mean=0.2,
+                    wall_force_max_mean_newton=0.1,
+                    force_available_rate=1.0,
+                ),
+            ),
+            trials=(),
+        )
+
+        anatomy_discovery = _AnatomyDiscoveryStub((scenario.anatomy,))
+        policy_discovery = _PolicyDiscoveryStub(
+            execution_wires=(execution_wire,),
+            startable_wires=(execution_wire,),
+            registry_policies=(policy,),
+            explicit_policies=(),
+        )
+        explicit_policy_discovery = _ExplicitPolicyDiscoveryStub(())
+        target_discovery = _TargetDiscoveryStub()
+        runner = _RunnerStub(report)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp) / "outputs"
+            job = EvaluationJob(
+                name="load_job",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                output_root=output_root,
+            )
+            service = DefaultEvaluationService(
+                anatomy_discovery=anatomy_discovery,
+                policy_discovery=policy_discovery,
+                explicit_policy_discovery=explicit_policy_discovery,
+                target_discovery=target_discovery,
+                evaluation_runner=runner,
+            )
+
+            persisted = service.run_evaluation_job(job)
+            assert persisted.artifacts is not None
+            loaded = service.load_report_from_disk(persisted.artifacts.report_json_path)
+
+        self.assertEqual(loaded.job_name, "load_job")
+        self.assertEqual(loaded.generated_at, "2026-04-21T11:00:00+00:00")
+        self.assertEqual(len(loaded.summaries), 1)
+        self.assertEqual(loaded.summaries[0].candidate_name, "candidate_a")
+
+    def test_save_clinical_feedback_writes_feedback_json_next_to_report(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_feedback")
+        report = EvaluationReport(
+            job_name="feedback_job",
+            generated_at="2026-04-21T12:00:00+00:00",
+            summaries=(),
+            trials=(),
+        )
+
+        anatomy_discovery = _AnatomyDiscoveryStub((scenario.anatomy,))
+        policy_discovery = _PolicyDiscoveryStub(
+            execution_wires=(execution_wire,),
+            startable_wires=(execution_wire,),
+            registry_policies=(policy,),
+            explicit_policies=(),
+        )
+        explicit_policy_discovery = _ExplicitPolicyDiscoveryStub(())
+        target_discovery = _TargetDiscoveryStub()
+        runner = _RunnerStub(report)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp) / "outputs"
+            job = EvaluationJob(
+                name="feedback_job",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                output_root=output_root,
+            )
+            service = DefaultEvaluationService(
+                anatomy_discovery=anatomy_discovery,
+                policy_discovery=policy_discovery,
+                explicit_policy_discovery=explicit_policy_discovery,
+                target_discovery=target_discovery,
+                evaluation_runner=runner,
+            )
+
+            persisted = service.run_evaluation_job(job)
+            assert persisted.artifacts is not None
+            feedback_path = service.save_clinical_feedback(
+                report_id=str(persisted.artifacts.output_dir),
+                feedback_data={
+                    "wire_actually_used": "steve_default/standard_j",
+                    "clinical_outcome": "Success",
+                    "clinician_notes": "Stable vessel access",
+                },
+            )
+
+            payload = json.loads(feedback_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["wire_actually_used"], "steve_default/standard_j")
+        self.assertEqual(payload["clinical_outcome"], "Success")
+        self.assertEqual(payload["clinician_notes"], "Stable vessel access")
 
 
 if __name__ == "__main__":

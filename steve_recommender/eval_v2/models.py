@@ -220,7 +220,7 @@ class TargetModeDescriptor:
 
 @dataclass(frozen=True)
 class FluoroscopySpec:
-    """Parameters passed to `eve.intervention.fluoroscopy.TrackingOnly`."""
+    """Parameters passed to the tracking-based fluoroscopy backend."""
 
     image_frequency_hz: float = 7.5
     image_rot_zx_deg: Tuple[float, float] = (20.0, 5.0)
@@ -419,7 +419,7 @@ class EvaluationScenario:
 
     Maps directly to the objects built by the current evaluation pipeline:
     - `anatomy` -> `eve.intervention.vesseltree.AorticArch`
-    - `fluoroscopy` -> `eve.intervention.fluoroscopy.TrackingOnly`
+    - `fluoroscopy` -> tracking-based fluoroscopy (TrackingOnly-compatible)
     - `target` -> `eve.intervention.target.*`
     - `friction` -> `SofaBeamAdapter(friction=...)`
     - `stop_device_at_tree_end` / `normalize_action` -> `MonoPlaneStatic(...)`
@@ -598,6 +598,18 @@ class EvaluationReport:
     artifacts: Optional[EvaluationArtifacts] = None
 
 
+@dataclass(frozen=True)
+class HistoricalReportSummary:
+    """Lightweight metadata for one persisted report on disk."""
+
+    job_name: str
+    generated_at: str
+    anatomy: str
+    tested_wires: Tuple[str, ...]
+    report_json_path: Path
+    output_dir: Path
+
+
 __all__ = [
     "AnatomyBranch",
     "AorticArchAnatomy",
@@ -616,6 +628,7 @@ __all__ = [
     "ForceTelemetryMode",
     "ForceTelemetrySpec",
     "ForceTelemetrySummary",
+    "HistoricalReportSummary",
     "ForceUnits",
     "ManualTarget",
     "PolicySpec",

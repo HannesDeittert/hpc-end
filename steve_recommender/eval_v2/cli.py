@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence, TextIO, Tuple
 
 from .models import (
+    AgentRef,
+    AorticArchAnatomy,
     BranchEndTarget,
     BranchIndexTarget,
     EvaluationCandidate,
@@ -26,6 +28,13 @@ def _parse_wire_ref(text: str) -> WireRef:
     if len(parts) != 2 or not parts[0] or not parts[1]:
         raise ValueError(f"wire ref must look like 'model/wire', got {text!r}")
     return WireRef(model=parts[0], wire=parts[1])
+
+
+def _parse_agent_ref(text: str) -> AgentRef:
+    parts = tuple(part.strip() for part in str(text).split(":", maxsplit=1))
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"agent ref must look like 'model/wire:agent', got {text!r}")
+    return AgentRef(wire=_parse_wire_ref(parts[0]), agent=parts[1])
 
 
 def _parse_vector3(text: str) -> tuple[float, float, float]:
@@ -120,6 +129,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--policy-name",
         default=None,
         help="Select one discoverable policy by PolicySpec.name",
+    )
+    policy_group.add_argument(
+        "--policy-agent-ref",
+        default=None,
+        help="Select one policy by stable agent ref formatted as 'model/wire:agent'",
     )
     policy_group.add_argument(
         "--policy-checkpoint",
@@ -236,6 +250,9 @@ def _select_policy_for_run(
     service: EvaluationService,
     execution_wire: WireRef,
 ) -> EvaluationCandidate | PolicySpec:
+    if args.policy_agent_ref is not None:
+        return service.resolve_policy_from_agent_ref(_parse_agent_ref(args.policy_agent_ref))
+
     if args.candidate_name is not None:
         candidates = service.list_candidates(
             execution_wire=execution_wire,
@@ -253,11 +270,24 @@ def _select_policy_for_run(
         matches = tuple(policy for policy in policies if policy.name == args.policy_name)
         if len(matches) != 1:
             raise ValueError(
-                f"Expected exactly one policy named {args.policy_name!r}, found {len(matches)}"
+                f"Expected exactly one policy named {args.policy_name!r}, found {len(matches)}; use --policy-agent-ref or --policy-checkpoint to disambiguate"
             )
         return matches[0]
 
     checkpoint_path = Path(args.policy_checkpoint)
+    policies = service.list_registry_policies() + service.list_explicit_policies()
+    checkpoint_key = checkpoint_path.resolve(strict=False)
+    matches = tuple(
+        policy
+        for policy in policies
+        if Path(policy.checkpoint_path).resolve(strict=False) == checkpoint_key
+    )
+    if len(matches) > 1:
+        raise ValueError(
+            f"Expected at most one policy with checkpoint {checkpoint_path!s}, found {len(matches)}"
+        )
+    if len(matches) == 1:
+        return matches[0]
     trained_on_wire = (
         None
         if args.policy_trained_on_wire is None
@@ -348,9 +378,10 @@ def _handle_list_policies(
     for policy in policies:
         _write(
             stdout,
-            "name={name} source={source} trained_on={trained_on} checkpoint={checkpoint}".format(
+            "name={name} source={source} agent_ref={agent_ref} trained_on={trained_on} checkpoint={checkpoint}".format(
                 name=policy.name,
                 source=policy.source,
+                agent_ref=policy.agent_ref or "unknown",
                 trained_on=policy.trained_on_wire.tool_ref if policy.trained_on_wire else "unknown",
                 checkpoint=policy.checkpoint_path,
             ),

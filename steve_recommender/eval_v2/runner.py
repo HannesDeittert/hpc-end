@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 from copy import deepcopy
-from typing import Any, Dict, List, Mapping, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 from third_party.stEVE.eve.env import Env
@@ -236,6 +236,48 @@ def _optional_finite(value: object) -> float | None:
     return numeric
 
 
+def _to_rgb_frame(
+    frame: np.ndarray,
+    *,
+    source_is_bgr: bool,
+) -> np.ndarray:
+    """Normalize raw frame buffers to contiguous RGB uint8 arrays."""
+
+    image = np.require(np.asarray(frame), requirements=["C"])
+    if image.ndim == 2:
+        gray = np.ascontiguousarray(image)
+        if not np.issubdtype(gray.dtype, np.uint8):
+            gray = np.nan_to_num(gray, nan=0.0, posinf=255.0, neginf=0.0)
+            if np.issubdtype(gray.dtype, np.floating) and gray.size > 0 and float(np.max(gray)) <= 1.0:
+                gray = gray * 255.0
+            gray = np.clip(gray, 0.0, 255.0).astype(np.uint8)
+        return np.repeat(gray[:, :, np.newaxis], 3, axis=2)
+
+    if image.ndim != 3:
+        raise ValueError(f"Unsupported frame shape: {image.shape!r}")
+
+    channels = image.shape[2]
+    if channels == 1:
+        single = np.ascontiguousarray(image[:, :, 0])
+        if not np.issubdtype(single.dtype, np.uint8):
+            single = np.nan_to_num(single, nan=0.0, posinf=255.0, neginf=0.0)
+            if np.issubdtype(single.dtype, np.floating) and single.size > 0 and float(np.max(single)) <= 1.0:
+                single = single * 255.0
+            single = np.clip(single, 0.0, 255.0).astype(np.uint8)
+        return np.repeat(single[:, :, np.newaxis], 3, axis=2)
+
+    rgb = np.ascontiguousarray(image[:, :, :3])
+    if not np.issubdtype(rgb.dtype, np.uint8):
+        rgb = np.nan_to_num(rgb, nan=0.0, posinf=255.0, neginf=0.0)
+        if np.issubdtype(rgb.dtype, np.floating) and rgb.size > 0 and float(np.max(rgb)) <= 1.0:
+            rgb = rgb * 255.0
+        rgb = np.clip(rgb, 0.0, 255.0).astype(np.uint8)
+
+    if source_is_bgr:
+        return np.ascontiguousarray(rgb[:, :, ::-1])
+    return rgb
+
+
 def _build_force_telemetry_summary(runtime: PreparedEvaluationRuntime) -> ForceTelemetrySummary:
     force_spec = runtime.scenario.force_telemetry
     if force_spec.required:
@@ -259,9 +301,12 @@ def _render_trial_if_enabled(
     env: Env,
     *,
     visualisation: TrialVisualisation | None,
-) -> None:
+) -> np.ndarray | None:
     if visualisation is not None:
-        env.render()
+        rendered = env.render()
+        if rendered is not None:
+            return np.asarray(rendered)
+    return None
 
 
 def _close_trial_visualisation(visualisation: TrialVisualisation | None) -> None:
@@ -314,6 +359,8 @@ def run_single_trial(
     seed: int,
     execution: ExecutionPlan,
     scoring: ScoringSpec,
+    frame_callback: Optional[Callable[[np.ndarray], None]] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> TrialResult:
     """Execute one candidate/scenario/seed rollout and normalize it to `TrialResult`."""
 
@@ -330,6 +377,10 @@ def run_single_trial(
     try:
         observation, info = _reset_single_trial_env(env, seed=seed)
         runtime.play_policy.reset()
+        if progress_callback is not None:
+            progress_callback(
+                f"trial_start index={trial_index} seed={seed} scenario={runtime.scenario.name} candidate={runtime.candidate.name}"
+            )
 
         translation_speeds_mm_s: list[float] = []
         episode_reward = 0.0
@@ -352,9 +403,24 @@ def run_single_trial(
                 )
             )
             observation, reward, terminated, truncated, info = env.step(env_action)
-            _render_trial_if_enabled(env, visualisation=visualisation)
+            rendered_frame = _render_trial_if_enabled(env, visualisation=visualisation)
+            if frame_callback is not None:
+                raw_frame = (
+                    rendered_frame
+                    if rendered_frame is not None
+                    else np.asarray(env.intervention.fluoroscopy.image)
+                )
+                frame = _to_rgb_frame(
+                    raw_frame,
+                    source_is_bgr=rendered_frame is None,
+                )
+                frame_callback(np.copy(frame))
             episode_reward += float(reward)
             last_info = dict(info)
+            if progress_callback is not None:
+                progress_callback(
+                    f"trial_step index={trial_index} step={step_index + 1} terminated={int(bool(terminated))} truncated={int(bool(truncated))}"
+                )
             if terminated and steps_to_success is None:
                 steps_to_success = step_index + 1
             if terminated or truncated:
@@ -389,6 +455,10 @@ def run_single_trial(
             max_episode_steps=execution.max_episode_steps,
             scoring=scoring,
         )
+        if progress_callback is not None:
+            progress_callback(
+                f"trial_end index={trial_index} success={int(bool(telemetry.success))} steps={telemetry.steps_total}"
+            )
         return TrialResult(
             scenario_name=runtime.scenario.name,
             candidate_name=runtime.candidate.name,

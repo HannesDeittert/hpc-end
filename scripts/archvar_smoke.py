@@ -12,14 +12,16 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TRAINING_SCRIPTS_DIR = os.path.join(
     REPO_ROOT, "third_party", "stEVE_training", "training_scripts"
 )
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 if TRAINING_SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, TRAINING_SCRIPTS_DIR)
 
 from util.env import BenchEnv  # noqa: E402
 from util.util import get_result_checkpoint_config_and_log_path  # noqa: E402
-from util.agent import BenchAgentSynchron  # noqa: E402
 from eve_rl import Runner  # noqa: E402
 from eve_bench import ArchVariety  # noqa: E402
+from steve_recommender.training.bench_agents import BenchAgentSynchron  # noqa: E402
 
 
 # Very short smoke-test settings (fast sanity check)

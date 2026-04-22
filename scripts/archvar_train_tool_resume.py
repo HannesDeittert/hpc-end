@@ -21,13 +21,13 @@ sys.path.insert(0, str(TRAINING_SCRIPTS))
 
 from util.env import BenchEnv  # noqa: E402
 from util.util import get_result_checkpoint_config_and_log_path  # noqa: E402
-from util.agent import BenchAgentSynchron  # noqa: E402
 from eve_rl import Runner  # noqa: E402
 from steve_recommender.bench import (  # noqa: E402
     build_archvar_intervention,
     list_tools,
     resolve_device,
 )
+from steve_recommender.training.bench_agents import BenchAgentSynchron  # noqa: E402
 
 
 RESULTS_FOLDER = (
@@ -122,6 +122,8 @@ if __name__ == "__main__":
     parser.add_argument("--training-steps", type=int, default=None)
     parser.add_argument("--explore-steps-between-eval", type=int, default=None)
     parser.add_argument("--explore-episodes-between-updates", type=int, default=None)
+    parser.add_argument("--train-max-steps", type=int, default=None)
+    parser.add_argument("--eval-max-steps", type=int, default=None)
     parser.add_argument(
         "--resume-from",
         type=str,
@@ -147,7 +149,7 @@ if __name__ == "__main__":
         default=0.0003217978434614328,
     )
     parser.add_argument("--hidden", nargs="+", type=int, default=[400, 400, 400])
-    parser.add_argument("-en", "--embedder_nodes", type=int, default=700)
+    parser.add_argument("-en", "--embedder_nodes", type=int, default=900)
     parser.add_argument("-el", "--embedder_layers", type=int, default=1)
     parser.add_argument(
         "--results-folder",
@@ -183,6 +185,8 @@ if __name__ == "__main__":
         "BATCH_SIZE": BATCH_SIZE,
         "UPDATE_PER_EXPLORE_STEP": UPDATE_PER_EXPLORE_STEP,
         "TOOL": args.tool,
+        "TRAIN_MAX_STEPS": args.train_max_steps,
+        "EVAL_MAX_STEPS": args.eval_max_steps,
     }
 
     (
@@ -254,8 +258,25 @@ if __name__ == "__main__":
     intervention = build_archvar_intervention(device=device)
     intervention2 = deepcopy(intervention)
 
-    env_train = BenchEnv(intervention=intervention, mode="train", visualisation=False)
-    env_eval = BenchEnv(intervention=intervention2, mode="eval", visualisation=False)
+    env_train_kwargs = {}
+    env_eval_kwargs = {}
+    if args.train_max_steps is not None:
+        env_train_kwargs["n_max_steps"] = args.train_max_steps
+    if args.eval_max_steps is not None:
+        env_eval_kwargs["n_max_steps"] = args.eval_max_steps
+
+    env_train = BenchEnv(
+        intervention=intervention,
+        mode="train",
+        visualisation=False,
+        **env_train_kwargs,
+    )
+    env_eval = BenchEnv(
+        intervention=intervention2,
+        mode="eval",
+        visualisation=False,
+        **env_eval_kwargs,
+    )
 
     if args.step_timeout is not None:
         for env in (env_train, env_eval):
@@ -327,12 +348,13 @@ if __name__ == "__main__":
         logging.getLogger(__name__).info(
             (
                 "Loaded counters heatup=%d explore=%d update=%d eval=%d "
-                "| heatup_steps_run=%d training_steps_target=%d"
+                "| replay_buffer_len=%d | heatup_steps_run=%d training_steps_target=%d"
             ),
             int(agent.step_counter.heatup),
             current_explore,
             int(agent.step_counter.update),
             int(agent.step_counter.evaluation),
+            len(agent.replay_buffer),
             heatup_steps_to_run,
             training_steps_target,
         )

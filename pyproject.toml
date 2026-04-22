@@ -26,6 +26,7 @@ steve-force-calibrate = "steve_recommender.evaluation.calibrate_cli:main"
 steve-force-reference = "steve_recommender.evaluation.reference_scene_cli:main"
 steve-train = "steve_recommender.rl.train_paper_arch:main"
 steve-ui-qt = "steve_recommender.main:main"
+steve-eval-v2-ui = "steve_recommender.eval_v2.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

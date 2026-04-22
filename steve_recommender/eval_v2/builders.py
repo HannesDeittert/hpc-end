@@ -50,7 +50,7 @@ def build_fluoroscopy(
     vessel_tree: VesselTree,
     simulation: Simulation,
 ) -> TrackingOnly:
-    """Build a real stEVE `TrackingOnly` fluoroscopy object."""
+    """Build a real stEVE fluoroscopy object."""
 
     return TrackingOnly(
         simulation=simulation,

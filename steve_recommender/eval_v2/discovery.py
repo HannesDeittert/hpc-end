@@ -9,6 +9,7 @@ from .models import AgentRef, AorticArchAnatomy, PolicySpec, WireRef
 
 DEFAULT_ANATOMY_REGISTRY_PATH = Path("data/anatomy_registry/index.json")
 DEFAULT_WIRE_REGISTRY_PATH = Path("data/wire_registry/index.json")
+DEFAULT_EXPLICIT_POLICY_MANIFEST_PATH = Path("data/wire_registry/archvar_inventory_manifest.json")
 
 
 def _read_json_file(path: Path) -> Mapping[str, Any]:
@@ -288,9 +289,119 @@ class FileBasedWireRegistryDiscovery:
         raise KeyError(f"Unknown registry agent: {agent_ref.agent_ref}")
 
 
+def _map_explicit_policy_entry(
+    version_raw: Mapping[str, Any],
+    agent_raw: Mapping[str, Any],
+    *,
+    manifest_dir: Path,
+) -> Optional[PolicySpec]:
+    new_model = str(version_raw.get("new_model", "")).strip()
+    new_version = str(version_raw.get("new_version", "")).strip()
+    if not new_model or not new_version:
+        return None
+
+    source_agent_json = _resolve_required_path(
+        agent_raw.get("agent_json"),
+        base_dir=manifest_dir,
+        field_name="agent_json",
+    )
+    if not source_agent_json.exists():
+        return None
+
+    agent_payload = _read_json_file(source_agent_json)
+    checkpoint_path = _resolve_optional_path(
+        agent_payload.get("checkpoint", agent_raw.get("source_checkpoint")),
+        base_dir=source_agent_json.parent,
+    )
+    if checkpoint_path is None or not checkpoint_path.exists():
+        return None
+
+    agent_name = str(agent_payload.get("name", agent_raw.get("agent_name", ""))).strip()
+    if not agent_name:
+        return None
+
+    trained_on_wire = WireRef(model=new_model, wire=new_version)
+    return PolicySpec(
+        name=agent_name,
+        checkpoint_path=checkpoint_path,
+        source="explicit",
+        trained_on_wire=trained_on_wire,
+        registry_agent=AgentRef(wire=trained_on_wire, agent=agent_name),
+        metadata_path=source_agent_json,
+        run_dir=_resolve_optional_path(
+            agent_payload.get("run_dir", agent_raw.get("run_dir")),
+            base_dir=source_agent_json.parent,
+        ),
+    )
+
+
+class FileBasedExplicitPolicyDiscovery:
+    """Read explicit policies from the wire-registry inventory manifest."""
+
+    def __init__(
+        self,
+        *,
+        manifest_path: Path = DEFAULT_EXPLICIT_POLICY_MANIFEST_PATH,
+    ) -> None:
+        self._manifest_path = Path(manifest_path)
+
+    @property
+    def manifest_path(self) -> Path:
+        return self._manifest_path
+
+    def list_explicit_policies(
+        self,
+        *,
+        execution_wire: Optional[WireRef] = None,
+    ) -> Tuple[PolicySpec, ...]:
+        payload = _read_json_file(self._manifest_path)
+        raw_versions = payload.get("versions", [])
+        if not isinstance(raw_versions, list):
+            raise TypeError(
+                f"Explicit policy manifest 'versions' field must be a list, got {type(raw_versions)}"
+            )
+
+        manifest_dir = self._manifest_path.parent
+        policies: list[PolicySpec] = []
+        for version_raw in raw_versions:
+            if not isinstance(version_raw, dict):
+                raise TypeError(
+                    f"Explicit policy manifest version entries must be objects, got {type(version_raw)}"
+                )
+            raw_agents = version_raw.get("agents", [])
+            if not isinstance(raw_agents, list):
+                raise TypeError(
+                    f"Explicit policy manifest 'agents' field must be a list, got {type(raw_agents)}"
+                )
+            for agent_raw in raw_agents:
+                if not isinstance(agent_raw, dict):
+                    raise TypeError(
+                        f"Explicit policy manifest agent entries must be objects, got {type(agent_raw)}"
+                    )
+                policy = _map_explicit_policy_entry(
+                    version_raw,
+                    agent_raw,
+                    manifest_dir=manifest_dir,
+                )
+                if policy is None:
+                    continue
+                if execution_wire is not None and policy.trained_on_wire != execution_wire:
+                    continue
+                policies.append(policy)
+        return tuple(policies)
+
+    def resolve_policy_from_agent_ref(self, agent_ref: AgentRef) -> PolicySpec:
+        for policy in self.list_explicit_policies():
+            if policy.registry_agent == agent_ref:
+                return policy
+        raise KeyError(f"Unknown explicit policy: {agent_ref.agent_ref}")
+
+
 __all__ = [
     "DEFAULT_ANATOMY_REGISTRY_PATH",
+    "DEFAULT_EXPLICIT_POLICY_MANIFEST_PATH",
     "DEFAULT_WIRE_REGISTRY_PATH",
     "FileBasedAnatomyDiscovery",
+    "FileBasedExplicitPolicyDiscovery",
     "FileBasedWireRegistryDiscovery",
 ]

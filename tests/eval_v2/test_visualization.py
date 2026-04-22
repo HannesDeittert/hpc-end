@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from steve_recommender.eval_v2.models import ExecutionPlan, VisualizationSpec
 from steve_recommender.eval_v2.visualization import (
@@ -86,6 +87,33 @@ class TrialVisualizationAdapterTests(unittest.TestCase):
                 trial_index=0,
                 visualisation_factory=lambda intervention: intervention,
             )
+
+    def test_build_trial_visualisation_uses_hidden_sofa_window_by_default(self) -> None:
+        runtime = SimpleNamespace(intervention=object())
+        created = []
+
+        class StubHiddenSofaPygame:
+            def __init__(self, intervention):
+                created.append(intervention)
+
+        with patch(
+            "steve_recommender.eval_v2.visualization.HiddenSofaPygame",
+            StubHiddenSofaPygame,
+        ):
+            visualisation = build_trial_visualisation(
+                runtime,
+                execution=ExecutionPlan(
+                    policy_device="cpu",
+                    visualization=VisualizationSpec(
+                        enabled=True,
+                        rendered_trials_per_candidate=1,
+                    ),
+                ),
+                trial_index=0,
+            )
+
+        self.assertIsInstance(visualisation, StubHiddenSofaPygame)
+        self.assertEqual(created, [runtime.intervention])
 
 
 if __name__ == "__main__":

@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from steve_recommender.eval_v2.discovery import FileBasedWireRegistryDiscovery
+from steve_recommender.eval_v2.discovery import (
+    FileBasedExplicitPolicyDiscovery,
+    FileBasedWireRegistryDiscovery,
+)
 from steve_recommender.eval_v2.models import AgentRef, PolicySpec, WireRef
 
 
@@ -223,6 +226,74 @@ class FileBasedWireRegistryDiscoveryTests(unittest.TestCase):
             policies = discovery.list_explicit_policies()
 
         self.assertEqual(policies, ())
+
+
+class FileBasedExplicitPolicyDiscoveryTests(unittest.TestCase):
+    def _write_manifest(self, root: Path) -> Path:
+        manifest_root = root / "wire_registry"
+        source_agent_dir = manifest_root / "source" / "agents" / "best_agent"
+        source_agent_dir.mkdir(parents=True)
+        checkpoint_path = source_agent_dir / "best_checkpoint.everl"
+        checkpoint_path.write_text("checkpoint-explicit", encoding="utf-8")
+        agent_json_path = source_agent_dir / "agent.json"
+        agent_json_path.write_text(
+            json.dumps(
+                {
+                    "checkpoint": str(checkpoint_path),
+                    "name": "best_agent",
+                    "run_dir": str(source_agent_dir),
+                    "tool": "steve_default/standard_j",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        manifest_payload = {
+            "schema_version": 1,
+            "versions": [
+                {
+                    "new_model": "steve_default",
+                    "new_version": "standard_j",
+                    "agents": [
+                        {
+                            "agent_json": str(agent_json_path),
+                            "agent_name": "best_agent",
+                            "source_checkpoint": str(checkpoint_path),
+                            "run_dir": str(source_agent_dir),
+                        }
+                    ],
+                }
+            ],
+        }
+        manifest_path = manifest_root / "archvar_inventory_manifest.json"
+        manifest_path.write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
+        return manifest_path
+
+    def test_list_explicit_policies_reads_manifest_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = self._write_manifest(Path(tmp))
+            discovery = FileBasedExplicitPolicyDiscovery(manifest_path=manifest_path)
+
+            policies = discovery.list_explicit_policies()
+            self.assertEqual(len(policies), 1)
+            policy = policies[0]
+            self.assertEqual(policy.name, "best_agent")
+            self.assertEqual(policy.source, "explicit")
+            self.assertEqual(policy.trained_on_wire, WireRef(model="steve_default", wire="standard_j"))
+            self.assertEqual(policy.agent_ref, "steve_default/standard_j:best_agent")
+            self.assertTrue(policy.checkpoint_path.exists())
+            self.assertTrue(policy.metadata_path.exists())
+
+    def test_resolve_policy_from_agent_ref_returns_explicit_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = self._write_manifest(Path(tmp))
+            discovery = FileBasedExplicitPolicyDiscovery(manifest_path=manifest_path)
+            agent_ref = AgentRef(wire=WireRef(model="steve_default", wire="standard_j"), agent="best_agent")
+
+            policy = discovery.resolve_policy_from_agent_ref(agent_ref)
+
+        self.assertEqual(policy.registry_agent, agent_ref)
 
 
 if __name__ == "__main__":
