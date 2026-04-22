@@ -30,10 +30,10 @@ def _load_sofa_pygame_class():
     return getattr(visualisation_module, "SofaPygame")
 
 
-_SofaPygameBase = _load_sofa_pygame_class()
+SofaPygame = _load_sofa_pygame_class()
 
 
-class HiddenSofaPygame(_SofaPygameBase):
+class HiddenSofaPygame(SofaPygame):
     """SofaPygame variant that keeps the SDL window hidden.
 
     We avoid patching vendored stEVE code by injecting the pygame.HIDDEN flag
@@ -76,8 +76,14 @@ def build_trial_visualisation(
     execution: ExecutionPlan,
     trial_index: int,
     visualisation_factory: Optional[VisualisationFactory] = None,
+    hidden_window: bool = True,
 ) -> Optional[TrialVisualisation]:
-    """Build one trial viewer from upstream stEVE when rendering is enabled."""
+    """Build one trial viewer from upstream stEVE when rendering is enabled.
+
+    `hidden_window=True` is intended for frame-streaming integrations (Qt UI),
+    while CLI usage should pass `hidden_window=False` to show a normal
+    interactive pygame window.
+    """
 
     visualization = execution.visualization
     if not should_visualize_trial(visualization, trial_index=trial_index):
@@ -90,11 +96,13 @@ def build_trial_visualisation(
     if visualisation_factory is not None:
         return visualisation_factory(runtime.intervention)
 
-    return HiddenSofaPygame(runtime.intervention)
+    visualisation_cls = HiddenSofaPygame if hidden_window else SofaPygame
+    return visualisation_cls(runtime.intervention)
 
 
 __all__ = [
     "HiddenSofaPygame",
+    "SofaPygame",
     "TrialVisualisation",
     "build_trial_visualisation",
     "should_visualize_trial",

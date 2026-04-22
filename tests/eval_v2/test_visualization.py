@@ -115,6 +115,34 @@ class TrialVisualizationAdapterTests(unittest.TestCase):
         self.assertIsInstance(visualisation, StubHiddenSofaPygame)
         self.assertEqual(created, [runtime.intervention])
 
+    def test_build_trial_visualisation_can_use_visible_sofa_window(self) -> None:
+        runtime = SimpleNamespace(intervention=object())
+        created = []
+
+        class StubSofaPygame:
+            def __init__(self, intervention):
+                created.append(intervention)
+
+        with patch(
+            "steve_recommender.eval_v2.visualization.SofaPygame",
+            StubSofaPygame,
+        ):
+            visualisation = build_trial_visualisation(
+                runtime,
+                execution=ExecutionPlan(
+                    policy_device="cpu",
+                    visualization=VisualizationSpec(
+                        enabled=True,
+                        rendered_trials_per_candidate=1,
+                    ),
+                ),
+                trial_index=0,
+                hidden_window=False,
+            )
+
+        self.assertIsInstance(visualisation, StubSofaPygame)
+        self.assertEqual(created, [runtime.intervention])
+
 
 if __name__ == "__main__":
     unittest.main()
