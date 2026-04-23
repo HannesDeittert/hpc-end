@@ -68,15 +68,37 @@ class _CheckpointMixin:
         self.episode_counter.evaluation = checkpoint["episodes"]["evaluation"]
 
 
+def _checkpoint_map_location(device: torch.device) -> torch.device:
+    # Keep optimizer tensors on the active training device when possible.
+    if device.type == "cuda" and not torch.cuda.is_available():
+        return torch.device("cpu")
+    return device
+
+
+def _load_trusted_checkpoint(file_path: str, map_location: torch.device):
+    # These checkpoints are produced by our training jobs and contain numpy
+    # scalars in additional_info, so PyTorch's weights_only loader rejects them.
+    try:
+        return torch.load(file_path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(file_path, map_location=map_location)
+
+
 class ResumableSingle(_CheckpointMixin, eve_rl.agent.Single):
     def load_checkpoint(self, file_path: str) -> None:
-        checkpoint = torch.load(file_path, map_location="cpu")
+        checkpoint = _load_trusted_checkpoint(
+            file_path,
+            map_location=_checkpoint_map_location(self.device),
+        )
         self._load_checkpoint_state(checkpoint)
 
 
 class ResumableSynchron(_CheckpointMixin, eve_rl.agent.Synchron):
     def load_checkpoint(self, file_path: str) -> None:
-        checkpoint = torch.load(file_path, map_location="cpu")
+        checkpoint = _load_trusted_checkpoint(
+            file_path,
+            map_location=_checkpoint_map_location(self.trainer_device),
+        )
         self._load_checkpoint_state(checkpoint)
         self._worker_load_state_dicts_network(self.algo.state_dicts_network())
         self.trainer.load_state_dicts_network(self.algo.state_dicts_network())

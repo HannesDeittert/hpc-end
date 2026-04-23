@@ -21,13 +21,16 @@ sys.path.insert(0, str(TRAINING_SCRIPTS))
 
 from util.env import BenchEnv  # noqa: E402
 from util.util import get_result_checkpoint_config_and_log_path  # noqa: E402
+from util.agent import BenchAgentSynchron  # noqa: E402
 from eve_rl import Runner  # noqa: E402
 from steve_recommender.bench import (  # noqa: E402
     build_archvar_intervention,
     list_tools,
     resolve_device,
 )
-from steve_recommender.training.bench_agents import BenchAgentSynchron  # noqa: E402
+from steve_recommender.evaluation.torch_checkpoint_compat import (  # noqa: E402
+    legacy_checkpoint_load_context,
+)
 
 
 RESULTS_FOLDER = (
@@ -124,6 +127,16 @@ if __name__ == "__main__":
     parser.add_argument("--explore-episodes-between-updates", type=int, default=None)
     parser.add_argument("--train-max-steps", type=int, default=None)
     parser.add_argument("--eval-max-steps", type=int, default=None)
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help=(
+            "Resume from an EveRL .everl checkpoint. If --training-steps is not "
+            "larger than the checkpoint exploration count, it is interpreted as "
+            "additional exploration steps."
+        ),
+    )
     parser.add_argument(
         "--step-timeout",
         type=float,
@@ -298,6 +311,29 @@ if __name__ == "__main__":
         args.stochastic_eval,
         False,
     )
+
+    if args.resume_from:
+        resume_path = Path(args.resume_from).expanduser().resolve()
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"resume checkpoint not found: {resume_path}")
+        logging.getLogger(__name__).info("Resuming from checkpoint: %s", resume_path)
+        with legacy_checkpoint_load_context():
+            agent.load_checkpoint(str(resume_path))
+        current_explore = int(agent.step_counter.exploration)
+        logging.getLogger(__name__).info(
+            "Loaded checkpoint counters: heatup=%s exploration=%s update=%s evaluation=%s",
+            agent.step_counter.heatup,
+            current_explore,
+            agent.step_counter.update,
+            agent.step_counter.evaluation,
+        )
+        if training_steps <= current_explore:
+            training_steps = current_explore + training_steps
+            logging.getLogger(__name__).info(
+                "Interpreting --training-steps as additional steps on resume; target=%s",
+                training_steps,
+            )
+        heatup_steps = 0
 
     env_train_config = os.path.join(config_folder, "env_train.yml")
     env_train.save_config(env_train_config)

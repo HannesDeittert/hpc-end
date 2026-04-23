@@ -6,6 +6,8 @@ from typing import List, Optional
 import torch
 
 from steve_recommender.adapters import eve_rl
+from steve_recommender.training.bench_agents import ResumableSingle, ResumableSynchron
+from steve_recommender.training.replaybuffer import ResumableVanillaEpisodeShared
 
 @dataclass(frozen=True)
 class PaperAgentConfig:
@@ -115,7 +117,7 @@ def _infer_obs_act_sizes(env_train) -> tuple[int, int]:
 
 
 def make_replay_buffer(cfg: PaperAgentConfig, replay_device: torch.device):
-    return eve_rl.replaybuffer.VanillaEpisodeShared(
+    return ResumableVanillaEpisodeShared(
         cfg.replay_buffer_size, cfg.batch_size, replay_device
     )
 
@@ -131,7 +133,7 @@ def make_single_agent(
     n_observations, n_actions = _infer_obs_act_sizes(env_train)
     algo = make_sac_algo(cfg, n_observations=n_observations, n_actions=n_actions)
     replay_buffer = make_replay_buffer(cfg, replay_device=replay_device)
-    return eve_rl.agent.Single(
+    return ResumableSingle(
         algo=algo,
         env_train=env_train,
         env_eval=env_eval,
@@ -156,7 +158,7 @@ def make_synchron_agent(
     n_observations, n_actions = _infer_obs_act_sizes(env_train)
     algo = make_sac_algo(cfg, n_observations=n_observations, n_actions=n_actions)
     replay_buffer = make_replay_buffer(cfg, replay_device=replay_device)
-    return eve_rl.agent.Synchron(
+    return ResumableSynchron(
         algo=algo,
         env_train=env_train,
         env_eval=env_eval,
