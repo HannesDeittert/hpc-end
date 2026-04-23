@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 from time import sleep, time
+from types import SimpleNamespace
 
 import gymnasium.spaces as spaces
 import numpy as np
@@ -281,3 +282,90 @@ def test_restored_agent_can_continue_updating(tmp_path: Path) -> None:
     finally:
         agent.close()
         restored_agent.close()
+
+
+def test_resumable_single_load_checkpoint_uses_agent_device(
+    tmp_path: Path, monkeypatch
+) -> None:
+    replay = ResumableVanillaEpisode(capacity=16, batch_size=2)
+    agent = _make_agent(replay)
+    checkpoint_path = tmp_path / "agent_device_map.everl"
+
+    try:
+        agent.save_checkpoint(str(checkpoint_path))
+        real_torch_load = torch.load
+        observed = {}
+
+        def _spy_torch_load(*args, **kwargs):
+            observed["map_location"] = kwargs.get("map_location")
+            return real_torch_load(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "load", _spy_torch_load)
+        agent.load_checkpoint(str(checkpoint_path))
+        assert observed["map_location"] == agent.device
+    finally:
+        agent.close()
+
+
+def test_resumable_synchron_load_checkpoint_uses_trainer_device(monkeypatch) -> None:
+    observed = {}
+
+    class _Algo:
+        @staticmethod
+        def state_dicts_network():
+            return {"network": 1}
+
+        @staticmethod
+        def state_dicts_optimizer():
+            return {"optim": 1}
+
+        @staticmethod
+        def state_dicts_scheduler():
+            return {"sched": 1}
+
+    class _Trainer:
+        def load_state_dicts_network(self, state):
+            observed["trainer_network"] = state
+
+        def load_state_dicts_optimizer(self, state):
+            observed["trainer_optimizer"] = state
+
+        def load_state_dicts_scheduler(self, state):
+            observed["trainer_scheduler"] = state
+
+    checkpoint = {
+        "network_state_dicts": {},
+        "optimizer_state_dicts": {},
+        "scheduler_state_dicts": {},
+        "steps": {"heatup": 0, "exploration": 0, "update": 0, "evaluation": 0},
+        "episodes": {"heatup": 0, "exploration": 0, "evaluation": 0},
+    }
+
+    def _spy_torch_load(*args, **kwargs):
+        observed["map_location"] = kwargs.get("map_location")
+        return checkpoint
+
+    def _load_checkpoint_state(_checkpoint):
+        observed["checkpoint_loaded"] = _checkpoint
+
+    def _worker_load_state_dicts_network(state):
+        observed["worker_network"] = state
+
+    fake_agent = SimpleNamespace(
+        trainer_device=torch.device("cpu"),
+        algo=_Algo(),
+        trainer=_Trainer(),
+        _load_checkpoint_state=_load_checkpoint_state,
+        _worker_load_state_dicts_network=_worker_load_state_dicts_network,
+    )
+
+    monkeypatch.setattr(torch, "load", _spy_torch_load)
+    from steve_recommender.training.bench_agents import ResumableSynchron
+
+    ResumableSynchron.load_checkpoint(fake_agent, "/tmp/fake.everl")
+    assert observed["map_location"] == fake_agent.trainer_device
+    assert observed["checkpoint_loaded"] is checkpoint
+    assert observed["worker_network"] == {"network": 1}
+    assert observed["trainer_network"] == {"network": 1}
+    assert observed["trainer_optimizer"] == {"optim": 1}
+    assert observed["trainer_scheduler"] == {"sched": 1}

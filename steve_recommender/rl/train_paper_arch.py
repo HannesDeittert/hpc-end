@@ -585,18 +585,31 @@ def run_training(cfg: TrainingConfig) -> Path:
         n_worker=cfg.n_worker,
     )
 
-    heatup_steps_to_run = cfg.heatup_steps
+    heatup_steps_to_run = int(cfg.heatup_steps)
+    training_steps_target = int(cfg.training_steps)
     if resume_path is not None:
         print(f"[train] resuming from checkpoint: {resume_path}", flush=True)
         agent.load_checkpoint(str(resume_path))
+        current_explore = int(agent.step_counter.exploration)
         print(
             "[train] loaded checkpoint: "
             f"heatup={int(agent.step_counter.heatup)} "
-            f"explore={int(agent.step_counter.exploration)} "
+            f"explore={current_explore} "
             f"update={int(agent.step_counter.update)} "
-            f"eval={int(agent.step_counter.evaluation)}",
+            f"eval={int(agent.step_counter.evaluation)} "
+            f"replay_buffer_len={len(agent.replay_buffer)}",
             flush=True,
         )
+        if training_steps_target <= current_explore:
+            additional_steps = max(training_steps_target, 1)
+            training_steps_target = current_explore + additional_steps
+            print(
+                "[train] training_steps interpreted as additional steps on resume: "
+                f"current_explore={current_explore} "
+                f"additional={additional_steps} "
+                f"target={training_steps_target}",
+                flush=True,
+            )
         # The checkpoint already contains heatup steps; do not heatup again.
         heatup_steps_to_run = 0
 
@@ -660,7 +673,7 @@ def run_training(cfg: TrainingConfig) -> Path:
         eval_episodes = None if cfg.eval_seeds else cfg.eval_episodes
         runner.training_run(
             heatup_steps_to_run,
-            cfg.training_steps,
+            training_steps_target,
             cfg.eval_every,
             cfg.explore_episodes_between_updates,
             cfg.update_per_explore_step,
