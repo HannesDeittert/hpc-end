@@ -9,6 +9,7 @@ import os
 import sys
 from typing import List
 
+import eve_rl as eve_rl_module
 import torch
 import torch.multiprocessing as mp
 
@@ -21,7 +22,7 @@ sys.path.insert(0, str(TRAINING_SCRIPTS))
 
 from util.env import BenchEnv  # noqa: E402
 from util.util import get_result_checkpoint_config_and_log_path  # noqa: E402
-from util.agent import BenchAgentSynchron  # noqa: E402
+from util.agent import BenchAgentSynchron as DefaultBenchAgentSynchron  # noqa: E402
 from eve_rl import Runner  # noqa: E402
 from steve_recommender.bench import (  # noqa: E402
     build_archvar_intervention,
@@ -30,6 +31,12 @@ from steve_recommender.bench import (  # noqa: E402
 )
 from steve_recommender.evaluation.torch_checkpoint_compat import (  # noqa: E402
     legacy_checkpoint_load_context,
+)
+from steve_recommender.training.bench_agents import (  # noqa: E402
+    LATEST_REPLAY_BUFFER_NAME,
+)
+from steve_recommender.training.replaybuffer import (  # noqa: E402
+    ResumableVanillaEpisodeShared,
 )
 
 
@@ -88,6 +95,50 @@ def _select_steps(args) -> List[int]:
     return [int(heatup), int(training), int(explore_steps), int(explore_episodes)]
 
 
+def _save_latest_replay_buffer(agent, path: Path) -> None:
+    if not hasattr(agent.replay_buffer, "state_dict"):
+        raise TypeError("Replay buffer does not support state export")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    payload = {
+        "replay_buffer_state": agent.replay_buffer.state_dict(),
+        "steps": {
+            "heatup": agent.step_counter.heatup,
+            "exploration": agent.step_counter.exploration,
+            "update": agent.step_counter.update,
+            "evaluation": agent.step_counter.evaluation,
+        },
+        "episodes": {
+            "heatup": agent.episode_counter.heatup,
+            "exploration": agent.episode_counter.exploration,
+            "evaluation": agent.episode_counter.evaluation,
+        },
+    }
+    torch.save(payload, tmp_path)
+    os.replace(tmp_path, path)
+
+
+def _load_replay_buffer_sidecar(agent, path: Path) -> None:
+    if not hasattr(agent.replay_buffer, "load_state_dict"):
+        raise TypeError("Replay buffer does not support state restoration")
+
+    with legacy_checkpoint_load_context():
+        payload = torch.load(str(path), map_location="cpu")
+    state = payload.get("replay_buffer_state", payload)
+    agent.replay_buffer.load_state_dict(state)
+
+
+def _install_latest_replay_buffer_writer(agent, path: Path) -> None:
+    original_save_checkpoint = agent.save_checkpoint
+
+    def _save_checkpoint_with_latest_replay_buffer(file_path, additional_info=None):
+        _save_latest_replay_buffer(agent, path)
+        return original_save_checkpoint(file_path, additional_info)
+
+    agent.save_checkpoint = _save_checkpoint_with_latest_replay_buffer
+
+
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
@@ -135,6 +186,23 @@ if __name__ == "__main__":
             "Resume from an EveRL .everl checkpoint. If --training-steps is not "
             "larger than the checkpoint exploration count, it is interpreted as "
             "additional exploration steps."
+        ),
+    )
+    parser.add_argument(
+        "--save-latest-replay-buffer",
+        action="store_true",
+        help=(
+            "Use the resumable replay buffer and overwrite one latest replay-buffer "
+            "sidecar next to the checkpoints."
+        ),
+    )
+    parser.add_argument(
+        "--resume-replay-buffer-from",
+        type=str,
+        default=None,
+        help=(
+            "Optional replay-buffer sidecar to load when resuming. If omitted, "
+            f"{LATEST_REPLAY_BUFFER_NAME} next to --resume-from is used when present."
         ),
     )
     parser.add_argument(
@@ -189,6 +257,8 @@ if __name__ == "__main__":
         "TOOL": args.tool,
         "TRAIN_MAX_STEPS": args.train_max_steps,
         "EVAL_MAX_STEPS": args.eval_max_steps,
+        "SAVE_LATEST_REPLAY_BUFFER": args.save_latest_replay_buffer,
+        "RESUME_REPLAY_BUFFER_FROM": args.resume_replay_buffer_from,
     }
 
     (
@@ -291,7 +361,31 @@ if __name__ == "__main__":
                 if hasattr(f_sim, "step_timeout"):
                     f_sim.step_timeout = args.step_timeout
 
-    agent = BenchAgentSynchron(
+    resume_path = None
+    if args.resume_from:
+        resume_path = Path(args.resume_from).expanduser().resolve()
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"resume checkpoint not found: {resume_path}")
+
+    resume_replay_buffer_path = None
+    if args.resume_replay_buffer_from:
+        resume_replay_buffer_path = Path(args.resume_replay_buffer_from).expanduser().resolve()
+        if not resume_replay_buffer_path.is_file():
+            raise FileNotFoundError(
+                f"resume replay buffer not found: {resume_replay_buffer_path}"
+            )
+    elif resume_path is not None:
+        candidate = resume_path.parent / LATEST_REPLAY_BUFFER_NAME
+        if candidate.is_file():
+            resume_replay_buffer_path = candidate
+
+    use_resumable_replay_buffer = (
+        args.save_latest_replay_buffer or resume_replay_buffer_path is not None
+    )
+    if use_resumable_replay_buffer:
+        eve_rl_module.replaybuffer.VanillaEpisodeShared = ResumableVanillaEpisodeShared
+
+    agent = DefaultBenchAgentSynchron(
         trainer_device,
         worker_device,
         args.learning_rate,
@@ -312,13 +406,25 @@ if __name__ == "__main__":
         False,
     )
 
-    if args.resume_from:
-        resume_path = Path(args.resume_from).expanduser().resolve()
-        if not resume_path.is_file():
-            raise FileNotFoundError(f"resume checkpoint not found: {resume_path}")
+    latest_replay_buffer_path = None
+    if use_resumable_replay_buffer:
+        latest_replay_buffer_path = (
+            Path(checkpoint_folder) / LATEST_REPLAY_BUFFER_NAME
+            if args.save_latest_replay_buffer
+            else None
+        )
+        logging.getLogger(__name__).info(
+            "Using resumable replay buffer: latest=%s resume_from=%s",
+            latest_replay_buffer_path,
+            resume_replay_buffer_path,
+        )
+
+    if resume_path is not None:
         logging.getLogger(__name__).info("Resuming from checkpoint: %s", resume_path)
         with legacy_checkpoint_load_context():
             agent.load_checkpoint(str(resume_path))
+        if resume_replay_buffer_path is not None:
+            _load_replay_buffer_sidecar(agent, resume_replay_buffer_path)
         current_explore = int(agent.step_counter.exploration)
         logging.getLogger(__name__).info(
             "Loaded checkpoint counters: heatup=%s exploration=%s update=%s evaluation=%s",
@@ -327,6 +433,10 @@ if __name__ == "__main__":
             agent.step_counter.update,
             agent.step_counter.evaluation,
         )
+        if use_resumable_replay_buffer:
+            logging.getLogger(__name__).info(
+                "Replay buffer length after resume: %s", len(agent.replay_buffer)
+            )
         if training_steps <= current_explore:
             training_steps = current_explore + training_steps
             logging.getLogger(__name__).info(
@@ -353,6 +463,9 @@ if __name__ == "__main__":
     )
     runner_config = os.path.join(config_folder, "runner.yml")
     runner.save_config(runner_config)
+
+    if latest_replay_buffer_path is not None:
+        _install_latest_replay_buffer_writer(agent, latest_replay_buffer_path)
 
     runner.training_run(
         heatup_steps,

@@ -258,6 +258,66 @@ def test_agent_checkpoint_restores_weights_counters_and_replay_buffer(tmp_path: 
         restored_agent.close()
 
 
+def test_agent_checkpoint_can_store_latest_replay_buffer_sidecar(
+    tmp_path: Path,
+) -> None:
+    replay = ResumableVanillaEpisodeShared(
+        capacity=16,
+        batch_size=8,
+        sample_device=torch.device("cpu"),
+    )
+    restored_replay = ResumableVanillaEpisodeShared(
+        capacity=16,
+        batch_size=8,
+        sample_device=torch.device("cpu"),
+    )
+    agent = _make_agent(replay)
+    restored_agent = _make_agent(restored_replay)
+    checkpoint_path = tmp_path / "checkpoint.everl"
+    sidecar_path = tmp_path / "latest_replay_buffer.everl"
+
+    try:
+        agent.configure_replay_buffer_checkpointing(
+            latest_replay_buffer_path=sidecar_path,
+            embed_in_checkpoint=False,
+        )
+        for seed in range(2):
+            agent.replay_buffer.push(_make_episode(seed))
+        _wait_for(lambda: len(agent.replay_buffer) == 2)
+        agent.save_checkpoint(str(checkpoint_path))
+
+        checkpoint = torch.load(
+            checkpoint_path, map_location="cpu", weights_only=False
+        )
+        assert "replay_buffer_state" not in checkpoint
+        assert checkpoint["replay_buffer_sidecar"] == sidecar_path.name
+        assert sidecar_path.is_file()
+        first_sidecar = torch.load(
+            sidecar_path, map_location="cpu", weights_only=False
+        )
+        assert len(first_sidecar["replay_buffer_state"]["buffer"]) == 2
+
+        agent.replay_buffer.push(_make_episode(9))
+        _wait_for(lambda: len(agent.replay_buffer) == 3)
+        agent.save_checkpoint(str(checkpoint_path))
+
+        second_sidecar = torch.load(
+            sidecar_path, map_location="cpu", weights_only=False
+        )
+        assert len(second_sidecar["replay_buffer_state"]["buffer"]) == 3
+
+        restored_agent.configure_replay_buffer_checkpointing(
+            resume_replay_buffer_path=sidecar_path,
+            embed_in_checkpoint=False,
+        )
+        restored_agent.load_checkpoint(str(checkpoint_path))
+        _wait_for(lambda: len(restored_agent.replay_buffer) == 3)
+        assert len(restored_agent.replay_buffer) == 3
+    finally:
+        agent.close()
+        restored_agent.close()
+
+
 def test_restored_agent_can_continue_updating(tmp_path: Path) -> None:
     replay = ResumableVanillaEpisode(capacity=16, batch_size=2)
     restored_replay = ResumableVanillaEpisode(capacity=16, batch_size=2)
@@ -345,8 +405,9 @@ def test_resumable_synchron_load_checkpoint_uses_trainer_device(monkeypatch) -> 
         observed["map_location"] = kwargs.get("map_location")
         return checkpoint
 
-    def _load_checkpoint_state(_checkpoint):
+    def _load_checkpoint_state(_checkpoint, checkpoint_path=None):
         observed["checkpoint_loaded"] = _checkpoint
+        observed["checkpoint_path"] = checkpoint_path
 
     def _worker_load_state_dicts_network(state):
         observed["worker_network"] = state
@@ -365,6 +426,7 @@ def test_resumable_synchron_load_checkpoint_uses_trainer_device(monkeypatch) -> 
     ResumableSynchron.load_checkpoint(fake_agent, "/tmp/fake.everl")
     assert observed["map_location"] == fake_agent.trainer_device
     assert observed["checkpoint_loaded"] is checkpoint
+    assert str(observed["checkpoint_path"]) == "/tmp/fake.everl"
     assert observed["worker_network"] == {"network": 1}
     assert observed["trainer_network"] == {"network": 1}
     assert observed["trainer_optimizer"] == {"optim": 1}
