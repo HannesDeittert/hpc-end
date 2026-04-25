@@ -39,9 +39,9 @@ from third_party.stEVE.eve.truncation import (
 )
 from third_party.stEVE.eve.util.coordtransform import tracking3d_to_2d
 
+from .force_telemetry import EvalV2ForceTelemetryCollector
 from .models import (
     ExecutionPlan,
-    ForceTelemetrySummary,
     ScoringSpec,
     TrialArtifactPaths,
     TrialResult,
@@ -278,25 +278,6 @@ def _to_rgb_frame(
     return rgb
 
 
-def _build_force_telemetry_summary(runtime: PreparedEvaluationRuntime) -> ForceTelemetrySummary:
-    force_spec = runtime.scenario.force_telemetry
-    if force_spec.required:
-        raise NotImplementedError(
-            "Force telemetry is marked as required, but the clean-room runner does not collect it yet"
-        )
-    if force_spec.mode != "passive":
-        raise NotImplementedError(
-            f"Force telemetry mode {force_spec.mode!r} is not implemented yet"
-        )
-    return ForceTelemetrySummary(
-        available_for_score=False,
-        validation_status="not_collected",
-        source="eval_v2_runner",
-        channel="none",
-        quality_tier="unavailable",
-    )
-
-
 def _render_trial_if_enabled(
     env: Env,
     *,
@@ -378,6 +359,17 @@ def run_single_trial(
     try:
         observation, info = _reset_single_trial_env(env, seed=seed)
         runtime.play_policy.reset()
+        force_collector = EvalV2ForceTelemetryCollector(
+            spec=runtime.scenario.force_telemetry,
+            action_dt_s=runtime.scenario.action_dt_s,
+        )
+        force_status = force_collector.ensure_runtime(intervention=runtime.intervention)
+        if runtime.scenario.force_telemetry.required and not force_status.configured:
+            raise RuntimeError(
+                "Force telemetry is required but could not be configured: "
+                f"{force_status.source} ({force_status.error})"
+            )
+
         if progress_callback is not None:
             progress_callback(
                 f"trial_start index={trial_index} seed={seed} scenario={runtime.scenario.name} candidate={runtime.candidate.name}"
@@ -404,6 +396,10 @@ def run_single_trial(
                 )
             )
             observation, reward, terminated, truncated, info = env.step(env_action)
+            force_collector.capture_step(
+                intervention=runtime.intervention,
+                step_index=step_index + 1,
+            )
             rendered_frame = _render_trial_if_enabled(env, visualisation=visualisation)
             if frame_callback is not None:
                 raw_frame = (
@@ -449,7 +445,7 @@ def run_single_trial(
             ),
             tip_speed_max_mm_s=float(tip_speed_max_mm_s),
             tip_speed_mean_mm_s=float(tip_speed_mean_mm_s),
-            forces=_build_force_telemetry_summary(runtime),
+            forces=force_collector.build_summary(),
         )
         score = score_trial(
             telemetry=telemetry,

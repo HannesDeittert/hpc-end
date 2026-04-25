@@ -1,0 +1,50 @@
+# Quick force extraction test config
+name: eval_force_extraction_test
+
+agents:
+  - name: amplatz_standardj_test
+    tool: amplatz_super_stiff/standard_j
+    checkpoint: results/paper_runs/2025-12-17_111848_paper_standardj/checkpoints/checkpoint7270811.everl
+
+n_trials: 2
+base_seed: 123
+max_episode_steps: 450
+
+policy_device: cuda
+stochastic_eval: false
+
+use_non_mp_sim: true
+
+force_extraction:
+  mode: passive
+  required: false
+  contact_epsilon: 1.0e-7
+  calibration:
+    required: false
+    cache_path: results/force_calibration/cache.json
+    tolerance_profile: default_v1
+
+scoring:
+  mode: default_v1
+  w_success: 2.0
+  w_efficiency: 1.0
+  w_safety: 1.0
+  w_smoothness: 0.25
+  normalize_weights: true
+  force_scale: 1.0
+  lcp_scale: 1.0
+  speed_scale_mm_s: 50.0
+
+output_root: results/eval_runs
+
+anatomy:
+  type: aortic_arch
+  arch_type: I
+  seed: 30
+  target_mode: branch_end
+  target_branches: ["lcca"]
+  target_threshold_mm: 5.0
+
+  image_frequency_hz: 7.5
+  image_rot_zx_deg: [20.0, 5.0]
+  friction: 0.001

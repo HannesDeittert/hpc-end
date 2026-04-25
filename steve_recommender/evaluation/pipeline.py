@@ -629,6 +629,8 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
         "wall_force_norm_sum_max",
         "wall_force_norm_sum_mean",
         "wall_field_force_norm_max",
+        "wall_tip_force_norm_max",
+        "wall_tip_force_norm_max_N",
         "wall_force_available",
         "wall_force_source",
         "wall_force_channel",
@@ -912,6 +914,12 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
                 wall_field_force_norm = _extract_series(
                     infos, key="wall_field_force_norm", default=np.nan
                 ).astype(np.float32)
+                wall_tip_force_norm = _extract_series(
+                    infos, key="wall_tip_force_norm", default=np.nan
+                ).astype(np.float32)
+                wall_tip_force_norm_N = _extract_series(
+                    infos, key="wall_tip_force_norm_N", default=np.nan
+                ).astype(np.float32)
                 wall_force_available = _extract_series(
                     infos, key="wall_force_available", default=False
                 ).astype(np.bool_)
@@ -1116,6 +1124,16 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
                 wall_field_force_norm_max = (
                     float(np.nanmax(wall_field_force_norm))
                     if wall_field_force_norm.size
+                    else float("nan")
+                )
+                wall_tip_force_norm_max = (
+                    float(np.nanmax(wall_tip_force_norm))
+                    if wall_tip_force_norm.size
+                    else float("nan")
+                )
+                wall_tip_force_norm_max_N = (
+                    float(np.nanmax(wall_tip_force_norm_N))
+                    if wall_tip_force_norm_N.size
                     else float("nan")
                 )
                 wall_force_max = float(
@@ -1512,6 +1530,8 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
                     wall_segment_count=wall_segment_count,
                     wall_force_norm_sum=wall_force_norm_sum,
                     wall_field_force_norm=wall_field_force_norm,
+                    wall_tip_force_norm=wall_tip_force_norm,
+                    wall_tip_force_norm_N=wall_tip_force_norm_N,
                     wall_force_available=wall_force_available,
                     wall_contact_force_vectors=wall_contact_force_vectors,
                     wall_contact_segment_indices=wall_contact_segment_indices,
@@ -1618,6 +1638,8 @@ def run_evaluation(cfg: EvaluationConfig) -> Path:
                     "wall_force_norm_sum_max": float(wall_force_norm_sum_max),
                     "wall_force_norm_sum_mean": float(wall_force_norm_sum_mean),
                     "wall_field_force_norm_max": float(wall_field_force_norm_max),
+                    "wall_tip_force_norm_max": float(wall_tip_force_norm_max),
+                    "wall_tip_force_norm_max_N": float(wall_tip_force_norm_max_N),
                     "wall_force_available": float(force_available_for_score),
                     "wall_force_source": wall_force_source,
                     "wall_force_channel": wall_force_channel,

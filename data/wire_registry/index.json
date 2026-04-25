@@ -20,6 +20,16 @@
       "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_original_best/checkpoints",
       "wire": "standard_j"
     },
+    "steve_default/tight_j:archvar_steve_tight_j_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/agent.json",
+      "agent_ref": "steve_default/tight_j:archvar_steve_tight_j_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/checkpoints/best_checkpoint.everl",
+      "model": "steve_default",
+      "name": "archvar_steve_tight_j_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/checkpoints",
+      "wire": "tight_j"
+    },
     "universal_ii/standard_j:archvar_universalII_best": {
       "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalII_best/agent.json",
       "agent_ref": "universal_ii/standard_j:archvar_universalII_best",
@@ -53,7 +63,7 @@
     }
   },
   "schema_version": 1,
-  "updated_at_utc": "2026-04-18T11:16:51.636506+00:00",
+  "updated_at_utc": "2026-04-24T18:51:11.172671+00:00",
   "wires": {
     "amplatz_super_stiff/gentle": {
       "agents_dir": null,
@@ -137,7 +147,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook"
     },
     "steve_default/tight_j": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents",
       "model": "steve_default",
       "name": "tight_j",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/tool_definition.json",

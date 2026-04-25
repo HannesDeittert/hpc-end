@@ -2,7 +2,7 @@
   "description": "Tight-J tip variant of stEVE Default.",
   "model": "steve_default",
   "name": "tight_j",
-  "policy_available": false,
+  "policy_available": true,
   "spec": {
     "beams_per_mm_straight": 0.5,
     "beams_per_mm_tip": 1.4,

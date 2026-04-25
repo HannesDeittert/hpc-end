@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_steve_tight_j_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/checkpoints",
+  "source_agent_json": null,
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/archive/agents/2026-04-22_070329_crusher_archvar_steve_tight_j_cap150_450_full_nw12_20260422_070328/checkpoints/best_checkpoint.everl",
+  "tool": "steve_default/tight_j"
+}
