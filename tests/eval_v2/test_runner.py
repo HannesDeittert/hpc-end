@@ -27,7 +27,11 @@ from steve_recommender.eval_v2.models import (
     VisualizationSpec,
     WireRef,
 )
-from steve_recommender.eval_v2.runner import build_single_trial_env, run_single_trial
+from steve_recommender.eval_v2.runner import (
+    _reset_play_policy,
+    build_single_trial_env,
+    run_single_trial,
+)
 from steve_recommender.eval_v2.runtime import PreparedEvaluationRuntime, build_intervention
 
 
@@ -101,6 +105,33 @@ class StubVisualisation:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+class _ResettableComponent:
+    def __init__(self) -> None:
+        self.reset_calls = 0
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+
+
+class RunnerPolicyResetTests(unittest.TestCase):
+    def test_reset_play_policy_resets_wrapped_policy_components(self) -> None:
+        play_policy = StubPlayPolicy()
+        body = _ResettableComponent()
+        head = _ResettableComponent()
+        play_policy.model = SimpleNamespace(
+            policy=SimpleNamespace(
+                body=body,
+                head=head,
+            )
+        )
+
+        _reset_play_policy(play_policy)
+
+        self.assertEqual(play_policy.reset_calls, 1)
+        self.assertEqual(head.reset_calls, 1)
+        self.assertEqual(body.reset_calls, 1)
 
 
 class SingleTrialRunnerIntegrationTests(unittest.TestCase):
@@ -263,6 +294,7 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(play_policy.reset_calls, 1)
         self.assertEqual(play_policy.eval_calls, 1)
         self.assertEqual(play_policy.exploration_calls, 0)
+        self.assertIsNone(result.policy_seed)
         self.assertEqual(len(play_policy.flat_states), 1)
         self.assertEqual(play_policy.flat_states[0].ndim, 1)
         self.assertGreater(play_policy.flat_states[0].size, 0)
@@ -308,6 +340,148 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(result.score.total, 0.25 / 3.25)
         self.assertEqual(play_policy.reset_calls, 1)
         self.assertEqual(play_policy.eval_calls, 1)
+
+    def test_run_single_trial_records_policy_seed_for_stochastic_policy_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = self._write_wire_registry(Path(tmp))
+            play_policy = StubPlayPolicy(exploration_action=(0.0, 0.0))
+            runtime = self._prepare_runtime(
+                registry_path=registry_path,
+                scenario=EvaluationScenario(
+                    name="manual_stochastic",
+                    anatomy=self._anatomy(),
+                    target=ManualTarget(
+                        threshold_mm=5.0,
+                        targets_vessel_cs=((0.0, 0.0, 0.0),),
+                    ),
+                ),
+                play_policy=play_policy,
+            )
+
+            execution = ExecutionPlan(
+                trials_per_candidate=3,
+                base_seed=123,
+                max_episode_steps=3,
+                policy_device="cpu",
+                policy_mode="stochastic",
+                policy_base_seed=1000,
+                stochastic_environment_mode="fixed_start",
+            )
+            result = run_single_trial(
+                runtime=runtime,
+                trial_index=1,
+                seed=execution.environment_seeds[1],
+                execution=execution,
+                scoring=ScoringSpec(),
+            )
+
+        self.assertEqual(result.seed, 123)
+        self.assertEqual(result.policy_seed, 1001)
+        self.assertEqual(play_policy.eval_calls, 0)
+        self.assertEqual(play_policy.exploration_calls, 1)
+
+    def test_run_single_trial_keeps_environment_rng_isolated_from_policy_seed(self) -> None:
+        class _StochasticPolicy:
+            def __init__(self) -> None:
+                self.device = "cpu"
+                self.samples: list[float] = []
+
+            def reset(self) -> None:
+                return None
+
+            def get_exploration_action(self, flat_state: np.ndarray) -> np.ndarray:
+                _ = flat_state
+                value = float(np.random.random())
+                self.samples.append(value)
+                return np.asarray((value, 0.0), dtype=np.float32)
+
+        class _StochasticEnv:
+            def __init__(self) -> None:
+                self.action_space = SimpleNamespace(
+                    shape=(1, 2),
+                    low=np.asarray([[-35.0, -3.14]], dtype=np.float32),
+                    high=np.asarray([[35.0, 3.14]], dtype=np.float32),
+                )
+                self.intervention = SimpleNamespace(
+                    fluoroscopy=SimpleNamespace(
+                        image=np.asarray([[1]], dtype=np.uint8)
+                    )
+                )
+
+            def step(self, action: np.ndarray):
+                _ = action
+                observation = {"tracking": np.zeros((1, 2), dtype=np.float32)}
+                info = {
+                    "success": True,
+                    "steps": 1,
+                    "path_ratio": float(np.random.random()),
+                    "trajectory_length": 0.0,
+                    "average_translation_speed": 0.0,
+                }
+                return observation, 0.0, True, False, info
+
+            def render(self):
+                return None
+
+        runtime = PreparedEvaluationRuntime(
+            candidate=self._candidate(),
+            scenario=EvaluationScenario(
+                name="rng_isolation",
+                anatomy=self._anatomy(),
+                target=ManualTarget(
+                    threshold_mm=5.0,
+                    targets_vessel_cs=((0.0, 0.0, 0.0),),
+                ),
+            ),
+            device=SimpleNamespace(),
+            intervention=SimpleNamespace(
+                velocity_limits=np.asarray([[35.0, 3.14]], dtype=np.float32)
+            ),
+            play_policy=_StochasticPolicy(),
+        )
+        env = _StochasticEnv()
+        execution = ExecutionPlan(
+            trials_per_candidate=2,
+            base_seed=123,
+            policy_mode="stochastic",
+            policy_base_seed=1000,
+            stochastic_environment_mode="fixed_start",
+            max_episode_steps=2,
+            policy_device="cpu",
+        )
+
+        with patch(
+            "steve_recommender.eval_v2.runner.build_single_trial_env",
+            return_value=env,
+        ), patch(
+            "steve_recommender.eval_v2.runner._reset_single_trial_env",
+            return_value=({"tracking": np.zeros((1, 2), dtype=np.float32)}, {}),
+        ):
+            result_a = run_single_trial(
+                runtime=runtime,
+                trial_index=0,
+                seed=execution.environment_seeds[0],
+                execution=execution,
+                scoring=ScoringSpec(),
+            )
+            result_b = run_single_trial(
+                runtime=runtime,
+                trial_index=1,
+                seed=execution.environment_seeds[1],
+                execution=execution,
+                scoring=ScoringSpec(),
+            )
+
+        self.assertEqual(result_a.seed, 123)
+        self.assertEqual(result_b.seed, 123)
+        self.assertNotEqual(result_a.policy_seed, result_b.policy_seed)
+        self.assertAlmostEqual(
+            float(result_a.telemetry.path_ratio_last),
+            float(result_b.telemetry.path_ratio_last),
+            places=12,
+        )
+        self.assertEqual(len(runtime.play_policy.samples), 2)
+        self.assertNotEqual(runtime.play_policy.samples[0], runtime.play_policy.samples[1])
 
     def test_run_single_trial_renders_and_closes_visualisation_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

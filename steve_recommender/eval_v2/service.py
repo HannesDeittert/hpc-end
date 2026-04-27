@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import concurrent.futures
 import csv
 import json
+import multiprocessing as mp
 from abc import ABC, abstractmethod
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Tuple
+from typing import Any, Callable, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
@@ -27,6 +29,9 @@ from .models import (
     EvaluationJob,
     EvaluationReport,
     HistoricalReportSummary,
+    ExecutionPlan,
+    EvaluationScenario,
+    ScoringSpec,
     PolicySpec,
     ScoreBreakdown,
     TargetModeDescriptor,
@@ -36,9 +41,113 @@ from .models import (
     ForceTelemetrySummary,
     WireRef,
 )
-from .runner import run_single_trial
+from .runner import configure_cpu_eval_threads, run_single_trial
 from .runtime import PreparedEvaluationRuntime, prepare_evaluation_runtime
 from .target_discovery import AnatomyTargetDiscovery
+
+
+@dataclass(frozen=True)
+class _ParallelTrialTask:
+    scenario_index: int
+    candidate_index: int
+    trial_index: int
+    seed: int
+    policy_seed: int | None
+    scenario: EvaluationScenario
+    candidate: EvaluationCandidate
+    execution: ExecutionPlan
+    scoring: ScoringSpec
+    registry_path: Path
+    policy_device: str
+
+
+@dataclass(frozen=True)
+class _ParallelTrialOutcome:
+    scenario_index: int
+    candidate_index: int
+    trial_index: int
+    trial: TrialResult
+
+
+def _run_parallel_trial_task(task: _ParallelTrialTask) -> _ParallelTrialOutcome:
+    configure_cpu_eval_threads(1)
+
+    runtime = prepare_evaluation_runtime(
+        candidate=task.candidate,
+        scenario=task.scenario,
+        registry_path=task.registry_path,
+        policy_device=task.policy_device,
+    )
+    try:
+        trial = run_single_trial(
+            runtime=runtime,
+            trial_index=task.trial_index,
+            seed=task.seed,
+            execution=task.execution,
+            scoring=task.scoring,
+            frame_callback=None,
+            progress_callback=None,
+        )
+    finally:
+        _maybe_close(runtime.play_policy)
+        _maybe_close(runtime.intervention)
+
+    return _ParallelTrialOutcome(
+        scenario_index=task.scenario_index,
+        candidate_index=task.candidate_index,
+        trial_index=task.trial_index,
+        trial=trial,
+    )
+
+
+def _run_parallel_trial_tasks_process(
+    tasks: Sequence[_ParallelTrialTask],
+    *,
+    worker_count: int,
+    task_runner: Callable[[_ParallelTrialTask], _ParallelTrialOutcome] = _run_parallel_trial_task,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> Tuple[_ParallelTrialOutcome, ...]:
+    if not tasks:
+        return ()
+
+    max_workers = max(1, min(int(worker_count), len(tasks)))
+    if progress_callback is not None:
+        progress_callback(f"parallel_start workers={max_workers} total={len(tasks)}")
+
+    outcomes: list[_ParallelTrialOutcome] = []
+    ctx = mp.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=max_workers,
+        mp_context=ctx,
+    ) as pool:
+        futures = [pool.submit(task_runner, task) for task in tasks]
+        completed = 0
+        for future in concurrent.futures.as_completed(futures):
+            outcome = future.result()
+            outcomes.append(outcome)
+            completed += 1
+            if progress_callback is not None:
+                progress_callback(
+                    "parallel_trial_done completed={completed} total={total} "
+                    "scenario={scenario} candidate={candidate} trial_index={trial_index}".format(
+                        completed=completed,
+                        total=len(tasks),
+                        scenario=outcome.trial.scenario_name,
+                        candidate=outcome.trial.candidate_name,
+                        trial_index=outcome.trial.trial_index,
+                    )
+                )
+
+    outcomes.sort(
+        key=lambda item: (
+            item.scenario_index,
+            item.candidate_index,
+            item.trial_index,
+        )
+    )
+    if progress_callback is not None:
+        progress_callback(f"parallel_end completed={len(outcomes)} total={len(tasks)}")
+    return tuple(outcomes)
 
 
 def _generated_at_utc() -> str:
@@ -467,11 +576,15 @@ class LocalEvaluationRunner:
         registry_path: Path = DEFAULT_WIRE_REGISTRY_PATH,
         runtime_factory: Callable[..., PreparedEvaluationRuntime] = prepare_evaluation_runtime,
         trial_runner: Callable[..., TrialResult] = run_single_trial,
+        parallel_task_runner: Callable[
+            ..., Tuple[_ParallelTrialOutcome, ...]
+        ] = _run_parallel_trial_tasks_process,
         generated_at_factory: Callable[[], str] = _generated_at_utc,
     ) -> None:
         self._registry_path = Path(registry_path)
         self._runtime_factory = runtime_factory
         self._trial_runner = trial_runner
+        self._parallel_task_runner = parallel_task_runner
         self._generated_at_factory = generated_at_factory
 
     def run_evaluation_job(
@@ -481,13 +594,72 @@ class LocalEvaluationRunner:
         frame_callback: Optional[Callable[[np.ndarray], None]] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> EvaluationReport:
+        worker_count = max(1, int(job.execution.worker_count))
+        use_parallel = (
+            worker_count > 1
+            and not job.execution.visualization.enabled
+            and frame_callback is None
+            and self._runtime_factory is prepare_evaluation_runtime
+            and self._trial_runner is run_single_trial
+        )
+        if worker_count > 1 and job.execution.visualization.enabled:
+            raise ValueError("worker_count > 1 is only supported for headless runs")
+        if use_parallel and str(job.execution.policy_device).lower() != "cpu":
+            raise ValueError("parallel eval_v2 workers require policy_device='cpu'")
+        if use_parallel:
+            return self._run_evaluation_job_parallel(
+                job,
+                worker_count=worker_count,
+                progress_callback=progress_callback,
+            )
+
+        isolate_headless_trials = (
+            not job.execution.visualization.enabled
+            and frame_callback is None
+            and self._runtime_factory is prepare_evaluation_runtime
+            and self._trial_runner is run_single_trial
+        )
         trials: list[TrialResult] = []
         for scenario in job.scenarios:
             for candidate in job.candidates:
+                if isolate_headless_trials:
+                    for trial_index, (seed, _policy_seed) in enumerate(job.execution.trial_seed_pairs):
+                        if progress_callback is not None:
+                            progress_callback(
+                                "runtime_prepare "
+                                f"scenario={scenario.name} candidate={candidate.name} "
+                                f"trial_index={trial_index}"
+                            )
+                        if str(job.execution.policy_device).lower() == "cpu":
+                            configure_cpu_eval_threads(1)
+                        runtime = self._runtime_factory(
+                            candidate=candidate,
+                            scenario=scenario,
+                            registry_path=self._registry_path,
+                            policy_device=job.execution.policy_device,
+                        )
+                        try:
+                            trial = self._trial_runner(
+                                runtime=runtime,
+                                trial_index=trial_index,
+                                seed=seed,
+                                execution=job.execution,
+                                scoring=job.scoring,
+                                frame_callback=frame_callback,
+                                progress_callback=progress_callback,
+                            )
+                            trials.append(trial)
+                        finally:
+                            _maybe_close(runtime.play_policy)
+                            _maybe_close(runtime.intervention)
+                    continue
+
                 if progress_callback is not None:
                     progress_callback(
                         f"runtime_prepare scenario={scenario.name} candidate={candidate.name}"
                     )
+                if str(job.execution.policy_device).lower() == "cpu":
+                    configure_cpu_eval_threads(1)
                 runtime = self._runtime_factory(
                     candidate=candidate,
                     scenario=scenario,
@@ -495,7 +667,7 @@ class LocalEvaluationRunner:
                     policy_device=job.execution.policy_device,
                 )
                 try:
-                    for trial_index, seed in enumerate(job.execution.seeds):
+                    for trial_index, (seed, _policy_seed) in enumerate(job.execution.trial_seed_pairs):
                         trial = self._trial_runner(
                             runtime=runtime,
                             trial_index=trial_index,
@@ -528,6 +700,68 @@ class LocalEvaluationRunner:
             generated_at=self._generated_at_factory(),
             summaries=summaries,
             trials=tuple(trials),
+            artifacts=EvaluationArtifacts(output_dir=job.output_root / job.name),
+        )
+
+    def _run_evaluation_job_parallel(
+        self,
+        job: EvaluationJob,
+        *,
+        worker_count: int,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> EvaluationReport:
+        tasks = tuple(
+            _ParallelTrialTask(
+                scenario_index=scenario_index,
+                candidate_index=candidate_index,
+                trial_index=trial_index,
+                seed=seed,
+                policy_seed=policy_seed,
+                scenario=scenario,
+                candidate=candidate,
+                execution=job.execution,
+                scoring=job.scoring,
+                registry_path=self._registry_path,
+                policy_device=job.execution.policy_device,
+            )
+            for scenario_index, scenario in enumerate(job.scenarios)
+            for candidate_index, candidate in enumerate(job.candidates)
+            for trial_index, (seed, policy_seed) in enumerate(job.execution.trial_seed_pairs)
+        )
+        outcomes = self._parallel_task_runner(
+            tasks,
+            worker_count=worker_count,
+            progress_callback=progress_callback,
+        )
+        outcomes = tuple(
+            sorted(
+                outcomes,
+                key=lambda item: (
+                    item.scenario_index,
+                    item.candidate_index,
+                    item.trial_index,
+                ),
+            )
+        )
+        trials = tuple(outcome.trial for outcome in outcomes)
+        summaries = tuple(
+            summarize_trials(
+                tuple(
+                    trial
+                    for trial in trials
+                    if trial.scenario_name == scenario.name
+                    and trial.candidate_name == candidate.name
+                    and trial.execution_wire == candidate.execution_wire
+                )
+            )
+            for scenario in job.scenarios
+            for candidate in job.candidates
+        )
+        return EvaluationReport(
+            job_name=job.name,
+            generated_at=self._generated_at_factory(),
+            summaries=summaries,
+            trials=trials,
             artifacts=EvaluationArtifacts(output_dir=job.output_root / job.name),
         )
 
@@ -893,6 +1127,11 @@ def _parse_trial_result(payload: dict[str, Any]) -> TrialResult:
         policy=_parse_policy_spec(payload.get("policy", {})),
         trial_index=int(payload.get("trial_index", 0)),
         seed=int(payload.get("seed", 0)),
+        policy_seed=(
+            None
+            if payload.get("policy_seed") is None
+            else int(payload.get("policy_seed"))
+        ),
         score=ScoreBreakdown(
             total=float(payload.get("score", {}).get("total", 0.0)),
             success=float(payload.get("score", {}).get("success", 0.0)),

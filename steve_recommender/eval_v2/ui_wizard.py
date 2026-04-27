@@ -212,16 +212,19 @@ class WizardShell(QWidget):
         if not candidates:
             raise ValueError("No candidates resolved for selected wires")
 
-        trials = 1 if state.is_deterministic else max(1, int(state.trials_per_wire))
+        trials = max(1, int(state.trials_per_wire))
         execution = ExecutionPlan(
             trials_per_candidate=trials,
+            policy_device="cpu",
             policy_mode="deterministic" if state.is_deterministic else "stochastic",
+            stochastic_environment_mode=state.stochastic_environment_mode,
             visualization=VisualizationSpec(
                 enabled=state.is_visualized,
                 rendered_trials_per_candidate=(
                     max(1, int(state.visualized_trials_count)) if state.is_visualized else 1
                 ),
             ),
+            worker_count=1 if state.is_visualized else max(1, int(state.worker_count)),
         )
 
         return EvaluationJob(

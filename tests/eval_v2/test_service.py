@@ -26,7 +26,13 @@ from steve_recommender.eval_v2.models import (
     WireRef,
 )
 from steve_recommender.eval_v2.runtime import PreparedEvaluationRuntime
-from steve_recommender.eval_v2.service import DefaultEvaluationService, LocalEvaluationRunner
+from steve_recommender.eval_v2.service import (
+    DefaultEvaluationService,
+    LocalEvaluationRunner,
+    _ParallelTrialTask,
+    _ParallelTrialOutcome,
+    _run_parallel_trial_tasks_process,
+)
 
 
 def _wire(model: str, wire: str) -> WireRef:
@@ -65,6 +71,7 @@ def _trial(
     policy: PolicySpec,
     trial_index: int,
     seed: int,
+    policy_seed: int | None = None,
     success: bool,
     score_total: float,
     steps_total: int,
@@ -89,6 +96,7 @@ def _trial(
         policy=policy,
         trial_index=trial_index,
         seed=seed,
+        policy_seed=policy_seed,
         score=ScoreBreakdown(
             total=score_total,
             success=1.0 if success else 0.0,
@@ -122,6 +130,30 @@ class _Closable:
 
     def close(self) -> None:
         self.closed = True
+
+
+def _parallel_smoke_task_runner(task: _ParallelTrialTask) -> _ParallelTrialOutcome:
+    trial = _trial(
+        scenario_name=task.scenario.name,
+        candidate_name=task.candidate.name,
+        execution_wire=task.candidate.execution_wire,
+        policy=task.candidate.policy,
+        trial_index=task.trial_index,
+        seed=task.seed,
+        policy_seed=task.policy_seed,
+        success=True,
+        score_total=float(task.trial_index + 1),
+        steps_total=task.trial_index + 1,
+        steps_to_success=task.trial_index + 1,
+        tip_speed_max_mm_s=1.0,
+        force_available_for_score=False,
+    )
+    return _ParallelTrialOutcome(
+        scenario_index=task.scenario_index,
+        candidate_index=task.candidate_index,
+        trial_index=task.trial_index,
+        trial=trial,
+    )
 
 
 class _AnatomyDiscoveryStub:
@@ -251,6 +283,52 @@ class _RunnerStub:
 
 
 class LocalEvaluationRunnerTests(unittest.TestCase):
+    def test_parallel_task_runner_process_pool_smoke(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+        execution = ExecutionPlan(
+            trials_per_candidate=3,
+            base_seed=500,
+            policy_device="cpu",
+            worker_count=2,
+        )
+        tasks = tuple(
+            _ParallelTrialTask(
+                scenario_index=0,
+                candidate_index=0,
+                trial_index=trial_index,
+                seed=seed,
+                policy_seed=policy_seed,
+                scenario=scenario,
+                candidate=candidate,
+                execution=execution,
+                scoring=ScoringSpec(),
+                registry_path=Path("/tmp/unused_registry.json"),
+                policy_device="cpu",
+            )
+            for trial_index, (seed, policy_seed) in enumerate(execution.trial_seed_pairs)
+        )
+        progress_events: list[str] = []
+
+        outcomes = _run_parallel_trial_tasks_process(
+            tasks,
+            worker_count=2,
+            task_runner=_parallel_smoke_task_runner,
+            progress_callback=progress_events.append,
+        )
+
+        self.assertEqual(len(outcomes), 3)
+        self.assertEqual([item.trial_index for item in outcomes], [0, 1, 2])
+        self.assertEqual([item.trial.seed for item in outcomes], [500, 501, 502])
+        self.assertIn("parallel_start workers=2 total=3", progress_events)
+        self.assertIn("parallel_end completed=3 total=3", progress_events)
+        self.assertEqual(
+            len([event for event in progress_events if event.startswith("parallel_trial_done")]),
+            3,
+        )
+
     def test_run_evaluation_job_aggregates_trials_into_candidate_summaries(self) -> None:
         execution_wire = _wire("steve_default", "standard_j")
         policy = _policy("policy_a", execution_wire)
@@ -366,6 +444,99 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertAlmostEqual(summary.wall_force_max_mean, 0.4)
         self.assertAlmostEqual(summary.wall_force_max_mean_newton, 0.2)
         self.assertAlmostEqual(summary.force_available_rate, 0.5)
+
+    def test_run_evaluation_job_reuses_same_seed_schedule_for_all_candidates(self) -> None:
+        execution_wire_a = _wire("steve_default", "standard_j")
+        execution_wire_b = _wire("steve_default", "tight_j")
+        policy_a = _policy("policy_a", execution_wire_a)
+        policy_b = _policy("policy_b", execution_wire_b)
+        candidate_a = _candidate("candidate_a", execution_wire_a, policy_a)
+        candidate_b = _candidate("candidate_b", execution_wire_b, policy_b)
+        scenario = _scenario("scenario_a")
+        job = EvaluationJob(
+            name="job_seed_schedule",
+            scenarios=(scenario,),
+            candidates=(candidate_a, candidate_b),
+            execution=ExecutionPlan(
+                trials_per_candidate=3,
+                base_seed=123,
+                policy_mode="stochastic",
+                policy_base_seed=1000,
+                stochastic_environment_mode="fixed_start",
+                policy_device="cpu",
+            ),
+        )
+
+        trial_runner_calls: list[tuple[str, int, int, int | None]] = []
+        play_policy = _Closable()
+        intervention = _Closable()
+
+        def runtime_factory(*, candidate, scenario, simulation=None, registry_path=None, policy_device="cpu"):
+            _ = simulation, registry_path, policy_device
+            return _RuntimeStub(
+                candidate=candidate,
+                scenario=scenario,
+                play_policy=play_policy,
+                intervention=intervention,
+            )
+
+        def trial_runner(
+            *,
+            runtime,
+            trial_index,
+            seed,
+            execution,
+            scoring,
+            frame_callback=None,
+            progress_callback=None,
+        ):
+            _ = scoring, frame_callback, progress_callback
+            policy_seed = execution.policy_seeds[trial_index]
+            trial_runner_calls.append((runtime.candidate.name, trial_index, seed, policy_seed))
+            return _trial(
+                scenario_name=runtime.scenario.name,
+                candidate_name=runtime.candidate.name,
+                execution_wire=runtime.candidate.execution_wire,
+                policy=runtime.candidate.policy,
+                trial_index=trial_index,
+                seed=seed,
+                policy_seed=policy_seed,
+                success=True,
+                score_total=1.0,
+                steps_total=5,
+                steps_to_success=5,
+                tip_speed_max_mm_s=10.0,
+                force_available_for_score=False,
+            )
+
+        runner = LocalEvaluationRunner(
+            runtime_factory=runtime_factory,
+            trial_runner=trial_runner,
+        )
+        report = runner.run_evaluation_job(job)
+
+        self.assertEqual(
+            trial_runner_calls,
+            [
+                ("candidate_a", 0, 123, 1000),
+                ("candidate_a", 1, 123, 1001),
+                ("candidate_a", 2, 123, 1002),
+                ("candidate_b", 0, 123, 1000),
+                ("candidate_b", 1, 123, 1001),
+                ("candidate_b", 2, 123, 1002),
+            ],
+        )
+        self.assertEqual(
+            [(trial.seed, trial.policy_seed) for trial in report.trials],
+            [
+                (123, 1000),
+                (123, 1001),
+                (123, 1002),
+                (123, 1000),
+                (123, 1001),
+                (123, 1002),
+            ],
+        )
 
     def test_run_evaluation_job_closes_runtime_resources_on_trial_failure(self) -> None:
         execution_wire = _wire("steve_default", "standard_j")
@@ -484,6 +655,154 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertEqual(report.job_name, "job_callbacks")
         self.assertEqual(frame_events, ["frame"])
         self.assertEqual(progress_events, ["runtime_prepare scenario=scenario_a candidate=candidate_a", "progress"])
+
+    def test_run_evaluation_job_parallel_path_aggregates_worker_outcomes(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+        job = EvaluationJob(
+            name="job_parallel",
+            scenarios=(scenario,),
+            candidates=(candidate,),
+            execution=ExecutionPlan(
+                trials_per_candidate=3,
+                base_seed=400,
+                policy_device="cpu",
+                worker_count=2,
+            ),
+            scoring=ScoringSpec(),
+            output_root=Path("/tmp/eval_outputs"),
+        )
+        seen_worker_count: list[int] = []
+        progress_events: list[str] = []
+
+        def parallel_task_runner(tasks, *, worker_count, progress_callback=None):
+            seen_worker_count.append(worker_count)
+            if progress_callback is not None:
+                progress_callback(f"parallel_start workers={worker_count} total={len(tasks)}")
+            outcomes = []
+            for task in tasks:
+                trial = _trial(
+                    scenario_name=task.scenario.name,
+                    candidate_name=task.candidate.name,
+                    execution_wire=task.candidate.execution_wire,
+                    policy=task.candidate.policy,
+                    trial_index=task.trial_index,
+                    seed=task.seed,
+                    policy_seed=task.policy_seed,
+                    success=(task.trial_index % 2 == 0),
+                    score_total=float(task.trial_index + 1),
+                    steps_total=task.trial_index + 5,
+                    steps_to_success=task.trial_index + 5,
+                    tip_speed_max_mm_s=10.0,
+                    force_available_for_score=False,
+                )
+                outcomes.append(
+                    _ParallelTrialOutcome(
+                        scenario_index=task.scenario_index,
+                        candidate_index=task.candidate_index,
+                        trial_index=task.trial_index,
+                        trial=trial,
+                    )
+                )
+            if progress_callback is not None:
+                progress_callback(f"parallel_end completed={len(outcomes)} total={len(tasks)}")
+            return tuple(outcomes)
+
+        runner = LocalEvaluationRunner(
+            parallel_task_runner=parallel_task_runner,
+            generated_at_factory=lambda: "2026-04-20T12:00:00+00:00",
+        )
+
+        report = runner.run_evaluation_job(job, progress_callback=progress_events.append)
+
+        self.assertEqual(seen_worker_count, [2])
+        self.assertEqual(len(report.trials), 3)
+        self.assertEqual([trial.seed for trial in report.trials], [400, 401, 402])
+        self.assertEqual(len(report.summaries), 1)
+        self.assertEqual(report.summaries[0].trial_count, 3)
+        self.assertIn("parallel_start workers=2 total=3", progress_events)
+        self.assertIn("parallel_end completed=3 total=3", progress_events)
+
+    def test_run_evaluation_job_parallel_path_preserves_policy_seed_schedule(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+        job = EvaluationJob(
+            name="job_parallel_seed_schedule",
+            scenarios=(scenario,),
+            candidates=(candidate,),
+            execution=ExecutionPlan(
+                trials_per_candidate=3,
+                base_seed=123,
+                policy_mode="stochastic",
+                policy_base_seed=1000,
+                stochastic_environment_mode="fixed_start",
+                policy_device="cpu",
+                worker_count=2,
+            ),
+        )
+
+        seen_pairs: list[tuple[int, int, int | None]] = []
+
+        def parallel_task_runner(tasks, *, worker_count, progress_callback=None):
+            _ = worker_count, progress_callback
+            outcomes = []
+            for task in tasks:
+                seen_pairs.append((task.trial_index, task.seed, task.policy_seed))
+                outcomes.append(
+                    _ParallelTrialOutcome(
+                        scenario_index=task.scenario_index,
+                        candidate_index=task.candidate_index,
+                        trial_index=task.trial_index,
+                        trial=_trial(
+                            scenario_name=task.scenario.name,
+                            candidate_name=task.candidate.name,
+                            execution_wire=task.candidate.execution_wire,
+                            policy=task.candidate.policy,
+                            trial_index=task.trial_index,
+                            seed=task.seed,
+                            policy_seed=task.policy_seed,
+                            success=True,
+                            score_total=1.0,
+                            steps_total=5,
+                            steps_to_success=5,
+                            tip_speed_max_mm_s=10.0,
+                            force_available_for_score=False,
+                        ),
+                    )
+                )
+            return tuple(outcomes)
+
+        runner = LocalEvaluationRunner(parallel_task_runner=parallel_task_runner)
+        report = runner.run_evaluation_job(job)
+
+        self.assertEqual(seen_pairs, [(0, 123, 1000), (1, 123, 1001), (2, 123, 1002)])
+        self.assertEqual(
+            [(trial.seed, trial.policy_seed) for trial in report.trials],
+            [(123, 1000), (123, 1001), (123, 1002)],
+        )
+
+    def test_run_evaluation_job_parallel_rejects_cuda_policy_device(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        job = EvaluationJob(
+            name="job_parallel_cuda",
+            scenarios=(_scenario("scenario_a"),),
+            candidates=(candidate,),
+            execution=ExecutionPlan(
+                trials_per_candidate=1,
+                policy_device="cuda",
+                worker_count=2,
+            ),
+        )
+        runner = LocalEvaluationRunner()
+
+        with self.assertRaises(ValueError):
+            runner.run_evaluation_job(job)
 
 
 class DefaultEvaluationServiceTests(unittest.TestCase):

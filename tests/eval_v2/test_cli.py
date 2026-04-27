@@ -271,6 +271,8 @@ class CliAdapterTests(unittest.TestCase):
         self.assertEqual(job.execution.max_episode_steps, 75)
         self.assertEqual(job.execution.policy_device, "cpu")
         self.assertEqual(job.execution.policy_mode, "deterministic")
+        self.assertEqual(job.execution.environment_seeds, (500, 501, 502))
+        self.assertEqual(job.execution.policy_seeds, (None, None, None))
 
         scenario = job.scenarios[0]
         self.assertEqual(scenario.name, "scenario_x")
@@ -332,6 +334,128 @@ class CliAdapterTests(unittest.TestCase):
         self.assertEqual(candidate.policy.checkpoint_path, Path("/tmp/manual_policy.everl"))
         self.assertEqual(candidate.policy.source, "explicit")
         self.assertEqual(candidate.policy.trained_on_wire, service.cross_wire)
+
+    def test_run_command_accepts_explicit_environment_and_policy_seed_lists(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--trial-count",
+                "3",
+                "--env-seeds",
+                "123,999,42",
+                "--policy-mode",
+                "stochastic",
+                "--policy-seeds",
+                "1000,1001,1002",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        job = service.jobs[0]
+        self.assertEqual(job.execution.environment_seeds, (123, 999, 42))
+        self.assertEqual(job.execution.policy_seeds, (1000, 1001, 1002))
+
+    def test_run_command_accepts_fixed_start_stochastic_mode(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--trial-count",
+                "3",
+                "--base-seed",
+                "123",
+                "--policy-mode",
+                "stochastic",
+                "--policy-base-seed",
+                "1000",
+                "--stochastic-env-mode",
+                "fixed_start",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        job = service.jobs[0]
+        self.assertEqual(job.execution.environment_seeds, (123, 123, 123))
+        self.assertEqual(job.execution.policy_seeds, (1000, 1001, 1002))
+
+    def test_run_command_rejects_environment_seed_list_length_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "env-seeds"):
+            run_cli(
+                [
+                    "run",
+                    "--anatomy",
+                    "Tree_00",
+                    "--execution-wire",
+                    "steve_default/standard_j",
+                    "--policy-name",
+                    "policy_a",
+                    "--target-mode",
+                    "branch_end",
+                    "--target-branches",
+                    "lcca",
+                    "--trial-count",
+                    "3",
+                    "--env-seeds",
+                    "123,999",
+                ],
+                service=_ServiceStub(),
+                stdout=io.StringIO(),
+            )
+
+    def test_run_command_rejects_policy_seed_list_length_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "policy-seeds"):
+            run_cli(
+                [
+                    "run",
+                    "--anatomy",
+                    "Tree_00",
+                    "--execution-wire",
+                    "steve_default/standard_j",
+                    "--policy-name",
+                    "policy_a",
+                    "--target-mode",
+                    "branch_end",
+                    "--target-branches",
+                    "lcca",
+                    "--trial-count",
+                    "3",
+                    "--policy-mode",
+                    "stochastic",
+                    "--policy-seeds",
+                    "1000,1001",
+                ],
+                service=_ServiceStub(),
+                stdout=io.StringIO(),
+            )
 
     def test_run_command_can_select_policy_by_agent_ref_when_names_collide(self) -> None:
         class _AmbiguousServiceStub(_ServiceStub):
@@ -424,6 +548,59 @@ class CliAdapterTests(unittest.TestCase):
             service.jobs[0].execution.visualization,
             VisualizationSpec(enabled=True, rendered_trials_per_candidate=2),
         )
+
+    def test_run_command_stores_worker_count(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--workers",
+                "4",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(service.jobs[0].execution.worker_count, 4)
+
+    def test_run_command_rejects_parallel_visualization(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        with self.assertRaises(ValueError):
+            run_cli(
+                [
+                    "run",
+                    "--anatomy",
+                    "Tree_00",
+                    "--execution-wire",
+                    "steve_default/standard_j",
+                    "--policy-name",
+                    "policy_a",
+                    "--target-mode",
+                    "branch_end",
+                    "--target-branches",
+                    "lcca",
+                    "--visualize",
+                    "--workers",
+                    "2",
+                ],
+                service=service,
+                stdout=stdout,
+            )
 
 
 if __name__ == "__main__":

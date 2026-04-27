@@ -1001,11 +1001,24 @@ QSpinBox::down-button:hover {
         self.runs_label = QLabel("Runs per wire:")
         self.runs_spin = QSpinBox()
         self.runs_spin.setRange(1, 100)
-        self.runs_spin.setValue(3)
+        self.runs_spin.setValue(1)
         runs_layout.addWidget(self.runs_label)
         runs_layout.addWidget(self.runs_spin)
         runs_layout.addStretch(1)
         container_layout.addWidget(self.runs_row)
+
+        self.stochastic_env_mode_row = QWidget()
+        stochastic_env_mode_layout = QHBoxLayout(self.stochastic_env_mode_row)
+        stochastic_env_mode_layout.setContentsMargins(0, 0, 0, 0)
+        stochastic_env_mode_layout.setSpacing(10)
+        self.stochastic_env_mode_label = QLabel("Stochastic environment:")
+        self.stochastic_env_mode_combo = QComboBox()
+        self.stochastic_env_mode_combo.addItem("Random Start, Randomized Policy", "random_start")
+        self.stochastic_env_mode_combo.addItem("Fixed Start, Randomized Policy", "fixed_start")
+        stochastic_env_mode_layout.addWidget(self.stochastic_env_mode_label)
+        stochastic_env_mode_layout.addWidget(self.stochastic_env_mode_combo)
+        stochastic_env_mode_layout.addStretch(1)
+        container_layout.addWidget(self.stochastic_env_mode_row)
 
         execution_title = QLabel("2. Execution Mode")
         execution_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #E6EDF3; margin-top: 32px; margin-bottom: 8px;")
@@ -1059,6 +1072,7 @@ QSpinBox::down-button:hover {
         ):
             widget.toggled.connect(self._sync_state)
         self.runs_spin.valueChanged.connect(self._sync_state)
+        self.stochastic_env_mode_combo.currentIndexChanged.connect(self._sync_state)
         self.visualized_runs_spin.valueChanged.connect(self._sync_state)
 
         self._sync_state()
@@ -1069,19 +1083,28 @@ QSpinBox::down-button:hover {
     def _sync_state(self) -> None:
         is_deterministic = self.deterministic_card.isChecked()
         is_visualized = self.live_card.isChecked()
-        self.runs_row.setVisible(not is_deterministic)
+        self.runs_row.setVisible(True)
 
-        show_visualized_count = (not is_deterministic) and is_visualized and self.runs_spin.value() > 1
+        show_stochastic_env_mode = (not is_deterministic) and self.runs_spin.value() > 1
+        self.stochastic_env_mode_row.setVisible(show_stochastic_env_mode)
+
+        show_visualized_count = is_visualized and self.runs_spin.value() > 1
         self.visualized_runs_row.setVisible(show_visualized_count)
 
-        trials = 1 if is_deterministic else self.runs_spin.value()
+        trials = self.runs_spin.value()
         visualized_count = 1 if not show_visualized_count else self.visualized_runs_spin.value()
+        state = self.controller.get_wizard_state()
+        total_trials = max(1, int(trials) * max(1, len(state.selected_wires)))
+        cpu_budget = max(1, int(os.cpu_count() or 1) - 5)
+        worker_count = 1 if is_visualized else max(1, min(total_trials, cpu_budget))
 
         self.controller.set_wizard_execution_config(
             is_deterministic=is_deterministic,
             trials_per_wire=trials,
+            stochastic_environment_mode=str(self.stochastic_env_mode_combo.currentData()),
             is_visualized=is_visualized,
             visualized_trials_count=visualized_count,
+            worker_count=worker_count,
         )
         self.set_valid(self.controller.can_forward_from_step(4))
 

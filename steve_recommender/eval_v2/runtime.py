@@ -323,6 +323,16 @@ def safe_reset_intervention(
         if seed is None
         else int(intervention._np_random.integers(0, 2**31))
     )
+    target_seed = (
+        None
+        if seed is None
+        else int(intervention._np_random.integers(0, 2**31))
+    )
+    simulation_seed = (
+        None
+        if seed is None
+        else int(intervention._np_random.integers(0, 2**31))
+    )
     intervention.vessel_tree.reset(episode_number, vessel_seed)
 
     insertion = intervention.vessel_tree.insertion
@@ -334,13 +344,9 @@ def safe_reset_intervention(
         coords_low=intervention.vessel_tree.coordinate_space.low,
         coords_high=intervention.vessel_tree.coordinate_space.high,
         vessel_visual_path=intervention.vessel_tree.visu_mesh_path,
+        seed=simulation_seed,
     )
 
-    target_seed = (
-        None
-        if seed is None
-        else int(intervention._np_random.integers(0, 2**31))
-    )
     intervention.target.reset(episode_number, target_seed)
     intervention.fluoroscopy.reset(episode_number)
     intervention.last_action *= 0.0

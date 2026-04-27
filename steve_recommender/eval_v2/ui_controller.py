@@ -60,8 +60,10 @@ class WizardState:
     selected_wires: list[WireRef] = field(default_factory=list)
     is_deterministic: bool = True
     trials_per_wire: int = 1
+    stochastic_environment_mode: str = "random_start"
     is_visualized: bool = False
     visualized_trials_count: int = 1
+    worker_count: int = 1
 
 
 class EvaluationWorker(QThread):
@@ -194,6 +196,30 @@ class EvaluationWorker(QThread):
                     trials_completed = min(trials_completed + 1, max(total_trials, 0))
                     current_step = 0
                     _emit_progress(_compute_percent(completed_trials=trials_completed, trial_step=0))
+                    return
+
+                if event == "parallel_start":
+                    workers = self._safe_int(payload.get("workers"), default=1)
+                    self.status_updated.emit(
+                        f"Running Headless Evaluation: {workers} workers..."
+                    )
+                    _emit_progress(0)
+                    return
+
+                if event == "parallel_trial_done":
+                    completed = self._safe_int(payload.get("completed"), default=trials_completed)
+                    total = self._safe_int(payload.get("total"), default=total_trials)
+                    trials_completed = max(0, min(completed, max(total, total_trials, 1)))
+                    self.status_updated.emit(
+                        f"Running Headless Evaluation: {trials_completed} of {max(total, total_trials)} trials"
+                    )
+                    denom = max(1, total, total_trials)
+                    _emit_progress(int(round(float(trials_completed) / float(denom) * 100.0)))
+                    return
+
+                if event == "parallel_end":
+                    trials_completed = max(total_trials, self._safe_int(payload.get("completed"), default=total_trials))
+                    _emit_progress(100)
                     return
 
             def _frame_callback(frame: np.ndarray) -> None:
@@ -393,13 +419,17 @@ class ClinicalUIController(QObject):
         *,
         is_deterministic: bool,
         trials_per_wire: int,
+        stochastic_environment_mode: str,
         is_visualized: bool,
         visualized_trials_count: int,
+        worker_count: int,
     ) -> None:
         self._wizard_state.is_deterministic = bool(is_deterministic)
         self._wizard_state.trials_per_wire = max(int(trials_per_wire), 1)
+        self._wizard_state.stochastic_environment_mode = str(stochastic_environment_mode)
         self._wizard_state.is_visualized = bool(is_visualized)
         self._wizard_state.visualized_trials_count = max(int(visualized_trials_count), 1)
+        self._wizard_state.worker_count = max(int(worker_count), 1)
 
     def can_forward_from_step(self, step_index: int) -> bool:
         state = self._wizard_state
@@ -412,9 +442,9 @@ class ClinicalUIController(QObject):
         if step_index == 3:
             return len(state.selected_wires) >= 1
         if step_index == 4:
-            if state.is_deterministic:
-                return True
             if state.trials_per_wire < 1:
+                return False
+            if state.stochastic_environment_mode not in {"fixed_start", "random_start"}:
                 return False
             if state.is_visualized and state.visualized_trials_count > state.trials_per_wire:
                 return False

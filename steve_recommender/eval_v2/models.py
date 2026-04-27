@@ -12,6 +12,7 @@ TargetModeKind = Literal["branch_end", "branch_index", "manual"]
 
 PolicySourceKind = Literal["registry", "explicit"]
 PolicyMode = Literal["deterministic", "stochastic"]
+StochasticEnvironmentMode = Literal["fixed_start", "random_start"]
 SimulationBackend = Literal["single_process", "multiprocess"]
 ForceTelemetryMode = Literal[
     "passive",
@@ -354,29 +355,127 @@ class VisualizationSpec:
 
 @dataclass(frozen=True)
 class ExecutionPlan:
-    """How scenarios are executed once candidates are resolved."""
+    """How scenarios are executed once candidates are resolved.
+
+    Seed management intentionally distinguishes between two independent sources
+    of randomness:
+
+    - environment seeds control reproducible reset state such as initial wire
+      orientation or insertion randomness inside the intervention scene,
+    - policy seeds control stochastic action sampling when `policy_mode` is
+      `"stochastic"`.
+
+    Every candidate in one job shares the exact same derived seed schedules so
+    candidate comparisons remain paired trial-by-trial.
+    """
 
     trials_per_candidate: int = 10
     base_seed: int = 123
     explicit_seeds: Tuple[int, ...] = ()
+    policy_base_seed: int = 1000
+    policy_explicit_seeds: Tuple[int, ...] = ()
     max_episode_steps: int = 1000
     policy_device: str = "cuda"
     policy_mode: PolicyMode = "deterministic"
+    stochastic_environment_mode: StochasticEnvironmentMode = "random_start"
     simulation_backend: SimulationBackend = "single_process"
     visualization: VisualizationSpec = field(default_factory=VisualizationSpec)
+    worker_count: int = 1
 
     def __post_init__(self) -> None:
         if self.trials_per_candidate < 1:
             raise ValueError("trials_per_candidate must be >= 1")
         if self.max_episode_steps < 1:
             raise ValueError("max_episode_steps must be >= 1")
+        if self.worker_count < 1:
+            raise ValueError("worker_count must be >= 1")
+        if self.visualization.enabled and self.worker_count > 1:
+            raise ValueError("worker_count > 1 is only supported for headless runs")
         _require_non_empty(self.policy_device, field_name="policy_device")
+        if self.explicit_seeds and len(self.explicit_seeds) != self.trials_per_candidate:
+            raise ValueError(
+                "explicit_seeds must match trials_per_candidate "
+                f"({self.trials_per_candidate}), got {len(self.explicit_seeds)}"
+            )
+        if self.policy_explicit_seeds and len(self.policy_explicit_seeds) != self.trials_per_candidate:
+            raise ValueError(
+                "policy_explicit_seeds must match trials_per_candidate "
+                f"({self.trials_per_candidate}), got {len(self.policy_explicit_seeds)}"
+            )
 
     @property
     def seeds(self) -> Tuple[int, ...]:
+        """Backward-compatible alias for environment seeds."""
+
+        return self.environment_seeds
+
+    @property
+    def environment_seeds(self) -> Tuple[int, ...]:
+        """Return the per-trial environment seed schedule.
+
+        Rules:
+        - `explicit_seeds` wins when provided.
+        - deterministic mode uses an incrementing sequence from `base_seed`.
+        - stochastic `fixed_start` keeps the environment constant across trials.
+        - stochastic `random_start` uses the incrementing sequence.
+        """
+
         if self.explicit_seeds:
             return self.explicit_seeds
+        if self.policy_mode == "stochastic" and self.stochastic_environment_mode == "fixed_start":
+            return tuple(self.base_seed for _ in range(self.trials_per_candidate))
         return tuple(self.base_seed + offset for offset in range(self.trials_per_candidate))
+
+    @property
+    def policy_seeds(self) -> Tuple[Optional[int], ...]:
+        """Return the per-trial policy seed schedule.
+
+        Deterministic policies disable policy sampling, so they do not carry
+        independent policy seeds. Stochastic policies either use the explicit
+        override or an incrementing sequence from `policy_base_seed`.
+        """
+
+        if self.policy_mode == "deterministic":
+            return tuple(None for _ in range(self.trials_per_candidate))
+        if self.policy_explicit_seeds:
+            return tuple(int(seed) for seed in self.policy_explicit_seeds)
+        return tuple(self.policy_base_seed + offset for offset in range(self.trials_per_candidate))
+
+    @property
+    def trial_seed_pairs(self) -> Tuple[Tuple[int, Optional[int]], ...]:
+        """Pair environment and policy seed schedules trial-by-trial."""
+
+        return tuple(zip(self.environment_seeds, self.policy_seeds))
+
+    def environment_seed_for_trial(self, trial_index: int) -> int:
+        """Resolve one environment seed for an arbitrary trial index.
+
+        The service normally iterates the precomputed schedule, but tests and
+        lower-level helpers may call into the runner directly with any
+        `trial_index`. This helper keeps that path deterministic and consistent
+        with the configured schedule semantics.
+        """
+
+        normalized_index = max(int(trial_index), 0)
+        if self.explicit_seeds:
+            if normalized_index < len(self.explicit_seeds):
+                return int(self.explicit_seeds[normalized_index])
+            return int(self.explicit_seeds[-1])
+        if self.policy_mode == "stochastic" and self.stochastic_environment_mode == "fixed_start":
+            return int(self.base_seed)
+        return int(self.base_seed + normalized_index)
+
+    def policy_seed_for_trial(self, trial_index: int) -> Optional[int]:
+        """Resolve one policy seed for an arbitrary trial index."""
+
+        if self.policy_mode == "deterministic":
+            return None
+        normalized_index = max(int(trial_index), 0)
+        if self.policy_explicit_seeds:
+            if normalized_index < len(self.policy_explicit_seeds):
+                return int(self.policy_explicit_seeds[normalized_index])
+            return int(self.policy_explicit_seeds[-1])
+        return int(self.policy_base_seed + normalized_index)
 
 
 @dataclass(frozen=True)
@@ -544,7 +643,7 @@ class TrialArtifactPaths:
 
 @dataclass(frozen=True)
 class TrialResult:
-    """One candidate/scenario/seed execution result."""
+    """One candidate/scenario/trial-seed execution result."""
 
     scenario_name: str
     candidate_name: str
@@ -554,6 +653,7 @@ class TrialResult:
     seed: int
     score: ScoreBreakdown
     telemetry: TrialTelemetrySummary
+    policy_seed: Optional[int] = None
     artifacts: TrialArtifactPaths = field(default_factory=TrialArtifactPaths)
 
 

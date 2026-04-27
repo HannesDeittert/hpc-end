@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 import time
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -55,6 +56,90 @@ from .visualization import TrialVisualisation, build_trial_visualisation
 TRACKING_POINT_COUNT = 3
 TRACKING_RESOLUTION_MM = 2.0
 TRACKING_MEMORY_STEPS = 2
+
+
+def configure_cpu_eval_threads(thread_count: int = 1) -> None:
+    """Keep CPU eval rollouts comparable across serial and worker processes."""
+
+    try:
+        import torch
+
+        torch.set_num_threads(max(1, int(thread_count)))
+    except Exception:
+        pass
+
+
+def _seed_trial_random_generators(seed: int) -> None:
+    normalized_seed = int(seed)
+    random.seed(normalized_seed)
+    np.random.seed(normalized_seed % (2**32))
+    try:
+        import torch
+
+        torch.manual_seed(normalized_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(normalized_seed)
+    except Exception:
+        pass
+
+
+def _capture_trial_random_state() -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+    }
+    try:
+        import torch
+
+        state["torch_cpu"] = torch.get_rng_state()
+        if torch.cuda.is_available():
+            state["torch_cuda"] = torch.cuda.get_rng_state_all()
+    except Exception:
+        pass
+    return state
+
+
+def _restore_trial_random_state(state: Mapping[str, Any]) -> None:
+    python_state = state.get("python")
+    if python_state is not None:
+        random.setstate(python_state)
+    numpy_state = state.get("numpy")
+    if numpy_state is not None:
+        np.random.set_state(numpy_state)
+    try:
+        import torch
+
+        torch_cpu_state = state.get("torch_cpu")
+        if torch_cpu_state is not None:
+            torch.set_rng_state(torch_cpu_state)
+        torch_cuda_state = state.get("torch_cuda")
+        if torch_cuda_state is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(torch_cuda_state)
+    except Exception:
+        pass
+
+
+def _build_seeded_random_state(seed: int) -> dict[str, Any]:
+    baseline = _capture_trial_random_state()
+    try:
+        _seed_trial_random_generators(seed)
+        return _capture_trial_random_state()
+    finally:
+        _restore_trial_random_state(baseline)
+
+
+def _reset_play_policy(play_policy: Any) -> None:
+    """Reset play policy state, including recurrent components hidden by SAC wrappers."""
+
+    reset = getattr(play_policy, "reset", None)
+    if callable(reset):
+        reset()
+
+    policy = getattr(getattr(play_policy, "model", None), "policy", None)
+    for component_name in ("head", "body"):
+        component_reset = getattr(getattr(policy, component_name, None), "reset", None)
+        if callable(component_reset):
+            component_reset()
 
 
 class TargetState2D(Observation):
@@ -343,7 +428,18 @@ def run_single_trial(
     frame_callback: Optional[Callable[[np.ndarray], None]] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> TrialResult:
-    """Execute one candidate/scenario/seed rollout and normalize it to `TrialResult`."""
+    """Execute one candidate/scenario/seed rollout and normalize it to `TrialResult`.
+
+    `seed` remains the environment seed for backward compatibility. When the
+    execution plan uses stochastic policy sampling, the policy RNG is reseeded
+    after the environment reset with the trial-specific policy seed so callers
+    can independently control initial conditions and action sampling.
+    """
+
+    if str(getattr(runtime.play_policy, "device", "")).lower() == "cpu":
+        configure_cpu_eval_threads(1)
+    _seed_trial_random_generators(seed)
+    policy_seed = execution.policy_seed_for_trial(trial_index)
 
     visualisation = build_trial_visualisation(
         runtime,
@@ -358,7 +454,12 @@ def run_single_trial(
     )
     try:
         observation, info = _reset_single_trial_env(env, seed=seed)
-        runtime.play_policy.reset()
+        _reset_play_policy(runtime.play_policy)
+        policy_rng_state = (
+            None
+            if policy_seed is None
+            else _build_seeded_random_state(policy_seed)
+        )
         force_collector = EvalV2ForceTelemetryCollector(
             spec=runtime.scenario.force_telemetry,
             action_dt_s=runtime.scenario.action_dt_s,
@@ -383,7 +484,16 @@ def run_single_trial(
 
         for step_index in range(execution.max_episode_steps):
             flat_state = _flatten_observation(observation)
-            action = _select_action(runtime, flat_state=flat_state, execution=execution)
+            if policy_rng_state is None:
+                action = _select_action(runtime, flat_state=flat_state, execution=execution)
+            else:
+                rollout_rng_state = _capture_trial_random_state()
+                _restore_trial_random_state(policy_rng_state)
+                try:
+                    action = _select_action(runtime, flat_state=flat_state, execution=execution)
+                    policy_rng_state = _capture_trial_random_state()
+                finally:
+                    _restore_trial_random_state(rollout_rng_state)
             env_action = _to_env_action(
                 action,
                 env=env,
@@ -463,6 +573,7 @@ def run_single_trial(
             policy=runtime.candidate.policy,
             trial_index=trial_index,
             seed=seed,
+            policy_seed=policy_seed,
             score=score,
             telemetry=telemetry,
             artifacts=TrialArtifactPaths(),

@@ -51,6 +51,16 @@ def _parse_branch_names(text: str) -> Tuple[str, ...]:
     return branches
 
 
+def _parse_seed_list(text: str, *, flag_name: str) -> Tuple[int, ...]:
+    parts = tuple(part.strip() for part in str(text).split(",") if part.strip())
+    if not parts:
+        raise ValueError(f"{flag_name} must include at least one integer seed")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError(f"{flag_name} must be a comma-separated list of integers") from exc
+
+
 def _format_optional(value: object) -> str:
     if value is None:
         return "n/a"
@@ -181,13 +191,41 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--threshold-mm", type=float, default=5.0)
 
     run_parser.add_argument("--trial-count", type=int, default=10)
-    run_parser.add_argument("--base-seed", type=int, default=123)
+    run_parser.add_argument("--base-seed", "--env-base-seed", dest="base_seed", type=int, default=123)
+    run_parser.add_argument(
+        "--env-seeds",
+        default=None,
+        help="Optional comma-separated explicit environment seed list; length must match --trial-count",
+    )
+    run_parser.add_argument(
+        "--policy-base-seed",
+        type=int,
+        default=1000,
+        help="Base seed for stochastic policy sampling when --policy-mode stochastic is used",
+    )
+    run_parser.add_argument(
+        "--policy-seeds",
+        default=None,
+        help="Optional comma-separated explicit policy seed list; length must match --trial-count",
+    )
     run_parser.add_argument("--max-episode-steps", type=int, default=1000)
+    run_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel CPU worker processes for headless evaluation.",
+    )
     run_parser.add_argument("--policy-device", default="cpu")
     run_parser.add_argument(
         "--policy-mode",
         choices=("deterministic", "stochastic"),
         default="deterministic",
+    )
+    run_parser.add_argument(
+        "--stochastic-env-mode",
+        choices=("fixed_start", "random_start"),
+        default="random_start",
+        help="When stochastic mode uses multiple trials, keep environment fixed or vary it across trials",
     )
 
     run_parser.add_argument("--friction", type=float, default=0.001)
@@ -459,6 +497,31 @@ def _handle_run(
     service: EvaluationService,
     stdout: TextIO,
 ) -> int:
+    if int(args.workers) < 1:
+        raise ValueError("--workers must be >= 1")
+    if bool(args.visualize) and int(args.workers) > 1:
+        raise ValueError("--workers > 1 is only supported for non-visualized runs")
+    explicit_env_seeds = (
+        ()
+        if args.env_seeds is None
+        else _parse_seed_list(args.env_seeds, flag_name="--env-seeds")
+    )
+    explicit_policy_seeds = (
+        ()
+        if args.policy_seeds is None
+        else _parse_seed_list(args.policy_seeds, flag_name="--policy-seeds")
+    )
+    if explicit_env_seeds and len(explicit_env_seeds) != int(args.trial_count):
+        raise ValueError(
+            "--env-seeds length must match --trial-count "
+            f"({int(args.trial_count)}), got {len(explicit_env_seeds)}"
+        )
+    if explicit_policy_seeds and len(explicit_policy_seeds) != int(args.trial_count):
+        raise ValueError(
+            "--policy-seeds length must match --trial-count "
+            f"({int(args.trial_count)}), got {len(explicit_policy_seeds)}"
+        )
+
     anatomy = service.get_anatomy(record_id=args.anatomy)
     execution_wire = _parse_wire_ref(args.execution_wire)
     target = _build_target_spec(args=args, service=service, anatomy=anatomy)
@@ -495,13 +558,18 @@ def _handle_run(
         execution=ExecutionPlan(
             trials_per_candidate=int(args.trial_count),
             base_seed=int(args.base_seed),
+            explicit_seeds=explicit_env_seeds,
+            policy_base_seed=int(args.policy_base_seed),
+            policy_explicit_seeds=explicit_policy_seeds,
             max_episode_steps=int(args.max_episode_steps),
             policy_device=str(args.policy_device),
             policy_mode=str(args.policy_mode),
+            stochastic_environment_mode=str(args.stochastic_env_mode),
             visualization=VisualizationSpec(
                 enabled=bool(args.visualize),
                 rendered_trials_per_candidate=int(args.visualize_trials_per_candidate),
             ),
+            worker_count=int(args.workers),
         ),
         output_root=Path(args.output_root),
     )
