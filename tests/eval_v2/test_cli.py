@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from steve_recommender.eval_v2.cli import run_cli
+from steve_recommender.eval_v2.force_telemetry import DEFAULT_TIP_THRESHOLD_MM
 from steve_recommender.eval_v2.models import (
     AgentRef,
     AnatomyBranch,
@@ -575,6 +576,61 @@ class CliAdapterTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(service.jobs[0].execution.worker_count, 4)
+
+    def test_cli_passes_tip_threshold_to_collector(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--tip-threshold-mm",
+                "7.5",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertAlmostEqual(service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm, 7.5)
+
+    def test_cli_uses_default_tip_threshold(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertAlmostEqual(
+            service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm,
+            DEFAULT_TIP_THRESHOLD_MM,
+        )
 
     def test_run_command_rejects_parallel_visualization(self) -> None:
         service = _ServiceStub()

@@ -1056,6 +1056,15 @@ def _to_optional_float(value: Any) -> Optional[float]:
     return float(value)
 
 
+def _parse_vector3(value: Any) -> tuple[float, float, float]:
+    if value is None:
+        return (0.0, 0.0, 0.0)
+    items = tuple(value)
+    if len(items) != 3:
+        return (0.0, 0.0, 0.0)
+    return (float(items[0]), float(items[1]), float(items[2]))
+
+
 def _parse_wire_ref(value: Any) -> WireRef:
     if isinstance(value, dict):
         return WireRef(model=str(value.get("model", "")), wire=str(value.get("wire", "")))
@@ -1114,6 +1123,13 @@ def _parse_force_telemetry(payload: Optional[dict[str, Any]]) -> Optional[ForceT
         gap_unmapped_ratio=_to_optional_float(payload.get("gap_unmapped_ratio")),
         gap_dominant_class=str(payload.get("gap_dominant_class", "none")),
         gap_contact_mode=str(payload.get("gap_contact_mode", "none")),
+        tip_force_available=bool(payload.get("tip_force_available", False)),
+        tip_force_validation_status=str(payload.get("tip_force_validation_status", "unmapped")),
+        tip_force_records=tuple(payload.get("tip_force_records", ())),
+        tip_force_total_vector_N=_parse_vector3(payload.get("tip_force_total_vector_N")),
+        tip_force_total_norm_N=float(payload.get("tip_force_total_norm_N", 0.0)),
+        lcp_mapped_wall_row_count_max=int(payload.get("lcp_mapped_wall_row_count_max", 0)),
+        lcp_contact_export_coverage=_to_optional_float(payload.get("lcp_contact_export_coverage")),
     )
 
 

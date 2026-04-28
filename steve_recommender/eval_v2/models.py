@@ -47,6 +47,12 @@ def _require_non_negative(value: float, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must be >= 0")
 
 
+def _default_tip_threshold_mm() -> float:
+    from .force_telemetry import DEFAULT_TIP_THRESHOLD_MM
+
+    return float(DEFAULT_TIP_THRESHOLD_MM)
+
+
 @dataclass(frozen=True)
 class WireRef:
     """Canonical physical-wire identifier.
@@ -315,11 +321,18 @@ class ForceCalibrationPolicy:
 
 @dataclass(frozen=True)
 class ForceTelemetrySpec:
-    """Wall-force extraction settings for `SofaWallForceInfo`."""
+    """Wall-force extraction settings for `SofaWallForceInfo`.
+
+    `tip_threshold_mm` is an absolute arc length from the distal end of the
+    wire, in mm. A collision DOF is classified as tip when its arc-length
+    distance from the distal end is less than or equal to this positive
+    threshold.
+    """
 
     mode: ForceTelemetryMode = "passive"
     required: bool = False
     contact_epsilon: float = 1e-7
+    tip_threshold_mm: float = field(default_factory=_default_tip_threshold_mm)
     plugin_path: Optional[Path] = None
     units: Optional[ForceUnits] = None
     calibration: ForceCalibrationPolicy = field(
@@ -331,6 +344,10 @@ class ForceTelemetrySpec:
             self.contact_epsilon,
             field_name="contact_epsilon",
         )
+        if float(self.tip_threshold_mm) <= 0.0:
+            raise ValueError(
+                f"tip_threshold_mm must be > 0, got {float(self.tip_threshold_mm)}"
+            )
         if self.mode == "constraint_projected_si_validated" and self.units is None:
             raise ValueError(
                 "units are required when mode='constraint_projected_si_validated'"
@@ -612,6 +629,13 @@ class ForceTelemetrySummary:
     gap_unmapped_ratio: Optional[float] = None
     gap_dominant_class: str = "none"
     gap_contact_mode: str = "none"
+    tip_force_available: bool = False
+    tip_force_validation_status: str = "unmapped"
+    tip_force_records: Tuple[dict, ...] = ()
+    tip_force_total_vector_N: Vector3 = (0.0, 0.0, 0.0)
+    tip_force_total_norm_N: float = 0.0
+    lcp_mapped_wall_row_count_max: int = 0
+    lcp_contact_export_coverage: Optional[float] = None
 
 
 @dataclass(frozen=True)

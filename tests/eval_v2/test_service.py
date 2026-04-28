@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import unittest
-from dataclasses import dataclass
-from pathlib import Path
 import csv
 import json
 import tempfile
+import unittest
+from dataclasses import dataclass
+from pathlib import Path
 
 from steve_recommender.eval_v2.models import (
     AnatomyBranch,
@@ -17,6 +17,7 @@ from steve_recommender.eval_v2.models import (
     EvaluationReport,
     EvaluationScenario,
     ExecutionPlan,
+    ForceTelemetrySummary,
     PolicySpec,
     ScoreBreakdown,
     ScoringSpec,
@@ -1057,7 +1058,40 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                     force_available_rate=1.0,
                 ),
             ),
-            trials=(),
+            trials=(
+                TrialResult(
+                    scenario_name="scenario_load",
+                    candidate_name="candidate_a",
+                    execution_wire=execution_wire,
+                    policy=policy,
+                    trial_index=0,
+                    seed=123,
+                    policy_seed=None,
+                    score=ScoreBreakdown(
+                        total=0.8,
+                        success=1.0,
+                        efficiency=1.0,
+                        safety=1.0,
+                        smoothness=1.0,
+                    ),
+                    telemetry=TrialTelemetrySummary(
+                        success=True,
+                        steps_total=3,
+                        steps_to_success=2,
+                        episode_reward=0.8,
+                        tip_speed_max_mm_s=15.0,
+                        forces=ForceTelemetrySummary(
+                            available_for_score=True,
+                            validation_status="stub",
+                            tip_force_available=True,
+                            tip_force_validation_status="ok",
+                            tip_force_records=({"wire_collision_dof": 2, "is_tip": True},),
+                            tip_force_total_vector_N=(0.1, 0.2, 0.3),
+                            tip_force_total_norm_N=0.3741657387,
+                        ),
+                    ),
+                ),
+            ),
         )
 
         anatomy_discovery = _AnatomyDiscoveryStub((scenario.anatomy,))
@@ -1095,6 +1129,10 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
         self.assertEqual(loaded.generated_at, "2026-04-21T11:00:00+00:00")
         self.assertEqual(len(loaded.summaries), 1)
         self.assertEqual(loaded.summaries[0].candidate_name, "candidate_a")
+        assert loaded.trials[0].telemetry.forces is not None
+        self.assertTrue(loaded.trials[0].telemetry.forces.tip_force_available)
+        self.assertEqual(loaded.trials[0].telemetry.forces.tip_force_records[0]["wire_collision_dof"], 2)
+        self.assertEqual(loaded.trials[0].telemetry.forces.tip_force_total_vector_N, (0.1, 0.2, 0.3))
 
     def test_save_clinical_feedback_writes_feedback_json_next_to_report(self) -> None:
         execution_wire = _wire("steve_default", "standard_j")

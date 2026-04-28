@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "trial_seed": 123,
+  "metadata": {
+    "source": "live_eval_v2_runner_force_trace",
+    "capture_date": "2026-04-28",
+    "steps": 20,
+    "anatomy": "Tree_00",
+    "branch": "lcca",
+    "candidate": "archvar_original_best",
+    "execution_wire": "steve_default/standard_j",
+    "force_channel": "lcp.constraintForces/dt",
+    "force_summary_source": "passive_monitor_wall_triangles:fallback_lcp_dt_mapped",
+    "force_validation_status": "ok",
+    "force_quality_tier": "validated"
+  },
+  "links": {
+    "root_dt": 0.006,
+    "vessel_triangle_count": 1890,
+    "passive_monitor_attached": true,
+    "contact_export_attached": true,
+    "lcp_computeConstraintForces": true
+  },
+  "summary": {
+    "steps_total": 20,
+    "monitor_nonzero_steps": 0,
+    "lcp_nonzero_steps": 9,
+    "max_monitor_force_n": 0.0,
+    "max_lcp_force_like_n": 0.0007865626057786536,
+    "max_wire_force_norm_n": 0.0,
+    "max_collision_force_norm_n": 0.0,
+    "contact_count_max": 0,
+    "contact_detected_any": false,
+    "lcp_max_abs_max_raw": 0.004719375634671921,
+    "lcp_sum_abs_mean_raw": 0.0025578237864423265,
+    "total_force_norm_max_n": 0.7865626057786536,
+    "force_unit_scale_to_newton": 1.0,
+    "mapping": {
+      "total_rows": 9,
+      "nonzero_rows": 3,
+      "mapped_rows": 9,
+      "unmapped_rows": 0,
+      "mapping_coverage": 1.0
+    }
+  },
+  "triangle_records": [
+    {
+      "timestep": 12,
+      "triangle_id": 870,
+      "fx_N": 0.47237876057624817,
+      "fy_N": -0.2943241000175476,
+      "fz_N": -0.21137990057468414,
+      "norm_N": 0.5953568816184998,
+      "contributing_rows": 3,
+      "mapped": true
+    },
+    {
+      "timestep": 13,
+      "triangle_id": 1041,
+      "fx_N": 0.6927481889724731,
+      "fy_N": -0.15391486883163452,
+      "fz_N": -0.3392506539821625,
+      "norm_N": 0.7865626811981201,
+      "contributing_rows": 3,
+      "mapped": true
+    },
+    {
+      "timestep": 14,
+      "triangle_id": 1026,
+      "fx_N": 0.5445027351379395,
+      "fy_N": 0.03044603206217289,
+      "fz_N": -0.28112298250198364,
+      "norm_N": 0.6135473251342773,
+      "contributing_rows": 3,
+      "mapped": true
+    }
+  ],
+  "wire_records": [
+    {
+      "timestep": 12,
+      "wire_collision_dof": 75,
+      "world_pos": [4.50288724899292, 5.838939666748047, 43.152889251708984],
+      "row_idx": 0,
+      "fx_N": 0.4724690020084381,
+      "fy_N": -0.29456397891044617,
+      "fz_N": -0.2108425348997116,
+      "norm_N": 0.5953565835952759,
+      "mapped": true
+    },
+    {
+      "timestep": 12,
+      "wire_collision_dof": 75,
+      "world_pos": [4.50288724899292, 5.838939666748047, 43.152889251708984],
+      "row_idx": 1,
+      "fx_N": 0.00002691656118258834,
+      "fy_N": 0.0003553118440322578,
+      "fz_N": -0.00043608169653452933,
+      "norm_N": 0.0005631502717733383,
+      "mapped": true
+    },
+    {
+      "timestep": 12,
+      "wire_collision_dof": 75,
+      "world_pos": [4.50288724899292, 5.838939666748047, 43.152889251708984],
+      "row_idx": 2,
+      "fx_N": -0.00011716604785760865,
+      "fy_N": -0.00011543243454070762,
+      "fz_N": -0.00010128438589163125,
+      "norm_N": 0.0001931606966536492,
+      "mapped": true
+    }
+  ],
+  "record_counts": {
+    "triangle_records_total": 10,
+    "wire_records_total": 36
+  }
+}

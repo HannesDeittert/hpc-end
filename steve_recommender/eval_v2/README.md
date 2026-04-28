@@ -603,6 +603,12 @@ Rules:
 - `--friction`
   - scene friction
 
+- `--tip-threshold-mm`
+  - distal-tip force aggregation threshold in millimeters
+  - defaults to `DEFAULT_TIP_THRESHOLD_MM = 3.0`
+  - a wire collision DOF is counted as tip when its arc-length distance from the
+    distal end is less than or equal to this threshold
+
 - `--image-frequency-hz`
 - `--image-rot-z-deg`
 - `--image-rot-x-deg`
@@ -782,6 +788,10 @@ This means:
 
 If you need exact manual seed lists, use the CLI.
 
+The GUI uses `DEFAULT_TIP_THRESHOLD_MM = 3.0` for distal-tip force aggregation.
+It does not expose this as a field yet; scripted runs can configure the same
+collector setting with `--tip-threshold-mm`.
+
 ### 8.8 Live visualization
 
 When live visualization is selected:
@@ -876,6 +886,7 @@ Current limitations to keep in mind:
 3. GUI currently uses default base seeds unless the code is extended.
 4. Visualization cannot be parallelized.
 5. Parallel headless execution currently requires CPU policy inference.
+6. GUI does not expose `tip_threshold_mm`; defaults to 3.0 mm via the constant.
 
 ## 11. Practical checklist
 

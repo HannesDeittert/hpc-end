@@ -45,6 +45,29 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--output-root", default="results/force_playground")
     p.add_argument("--run-name", default="eval_v2_plain_wall_press")
+    p.add_argument(
+        "--drive-mode",
+        choices=["external_force", "action_only"],
+        default="external_force",
+        help=(
+            "external_force: inject via wire DOFs externalForce/force field; "
+            "action_only: no direct force write (motion/contact-only validation)."
+        ),
+    )
+    p.add_argument(
+        "--independent-relerr-threshold",
+        type=float,
+        default=0.25,
+        help=(
+            "Relative-error threshold for monitor-vs-LCP independent magnitude agreement."
+        ),
+    )
+    p.add_argument(
+        "--independent-epsilon-n",
+        type=float,
+        default=1e-5,
+        help="Minimum magnitude (N) for independent agreement samples.",
+    )
     return p.parse_args()
 
 
@@ -123,8 +146,9 @@ def main() -> None:
         )
     )
     print(
-        "[eval_v2-wall-press] mode={mode} steps={steps} target_force_n={force:.6g} action_dt_s={dt:.6g} sim_dt_s={sim_dt:.6g}".format(
+        "[eval_v2-wall-press] mode={mode} drive_mode={drive_mode} steps={steps} target_force_n={force:.6g} action_dt_s={dt:.6g} sim_dt_s={sim_dt:.6g}".format(
             mode=spec.mode,
+            drive_mode=str(args.drive_mode),
             steps=cfg.steps,
             force=float(args.target_force_n),
             dt=float(scene.dt_s),
@@ -141,10 +165,13 @@ def main() -> None:
 
         cmd_force_n = np.asarray(command.commanded_force_vector_n, dtype=np.float64).reshape((3,))
         cmd_force_scene = cmd_force_n / float(force_scale_to_newton)
-        # stEVE ConstantForceField path behaves as impulse-like per integration
-        # substep; multiply by sim dt to realize the requested force magnitude.
-        cmd_impulse_scene = cmd_force_scene * float(sim_dt_s)
-        apply_status = force_applicator.apply_force_scene(cmd_impulse_scene)
+        if str(args.drive_mode) == "external_force":
+            # stEVE ConstantForceField path behaves as impulse-like per integration
+            # substep; multiply by sim dt to realize the requested force magnitude.
+            cmd_impulse_scene = cmd_force_scene * float(sim_dt_s)
+            apply_status = force_applicator.apply_force_scene(cmd_impulse_scene)
+        else:
+            apply_status = "skipped:action_only"
 
         scene.intervention.step(np.asarray(command.action, dtype=np.float32))
         collector.capture_step(intervention=scene.intervention, step_index=step_idx)
@@ -195,9 +222,35 @@ def main() -> None:
     measured_tail_mean = float(np.mean(tail_monitor)) if tail_monitor else float("nan")
     fallback_tail_mean = float(np.mean(tail_fallback)) if tail_fallback else float("nan")
 
+    independent_pairs: list[tuple[float, float]] = []
+    for row in rows:
+        monitor_val = float(row["monitor_total_force_norm"])
+        lcp_val = float(row["fallback_lcp_force_norm"])
+        if not (np.isfinite(monitor_val) and np.isfinite(lcp_val)):
+            continue
+        if max(abs(monitor_val), abs(lcp_val)) < float(args.independent_epsilon_n):
+            continue
+        independent_pairs.append((monitor_val, lcp_val))
+
+    independent_rel_errors = [
+        abs(m - l) / max(abs(m), abs(l), float(args.independent_epsilon_n))
+        for (m, l) in independent_pairs
+    ]
+    independent_rel_error_mean = (
+        float(np.mean(independent_rel_errors)) if independent_rel_errors else float("nan")
+    )
+    independent_rel_error_max = (
+        float(np.max(independent_rel_errors)) if independent_rel_errors else float("nan")
+    )
+    independent_agreement_ok = bool(
+        independent_rel_errors
+        and independent_rel_error_mean <= float(args.independent_relerr_threshold)
+    )
+
     report = {
         "run_dir": str(run_dir),
         "mode": spec.mode,
+        "drive_mode": str(args.drive_mode),
         "target_force_n": float(args.target_force_n),
         "steps": int(cfg.steps),
         "dt_s": float(scene.dt_s),
@@ -210,11 +263,21 @@ def main() -> None:
             "total_force_norm_mean": summary.total_force_norm_mean,
             "lcp_max_abs_max": summary.lcp_max_abs_max,
             "lcp_sum_abs_mean": summary.lcp_sum_abs_mean,
+            "lcp_mapped_wall_row_count_max": summary.lcp_mapped_wall_row_count_max,
+            "lcp_contact_export_coverage": summary.lcp_contact_export_coverage,
         },
         "tail_window_steps": int(tail_window),
         "tail_means": {
             "monitor_total_force_norm": measured_tail_mean,
             "fallback_lcp_force_norm": fallback_tail_mean,
+        },
+        "independent_magnitude_check": {
+            "pair_count": int(len(independent_pairs)),
+            "epsilon_n": float(args.independent_epsilon_n),
+            "relative_error_threshold": float(args.independent_relerr_threshold),
+            "relative_error_mean": independent_rel_error_mean,
+            "relative_error_max": independent_rel_error_max,
+            "agreement_ok": independent_agreement_ok,
         },
     }
 
@@ -232,6 +295,15 @@ def main() -> None:
             m=measured_tail_mean,
             l=fallback_tail_mean,
             t=float(args.target_force_n),
+        )
+    )
+    print(
+        "[eval_v2-wall-press] independent_check pairs={pairs} mean_relerr={mean:.6g} max_relerr={mx:.6g} threshold={th:.6g} ok={ok}".format(
+            pairs=int(len(independent_pairs)),
+            mean=independent_rel_error_mean,
+            mx=independent_rel_error_max,
+            th=float(args.independent_relerr_threshold),
+            ok=independent_agreement_ok,
         )
     )
 

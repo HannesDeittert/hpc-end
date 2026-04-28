@@ -37,3 +37,9 @@ steve_recommender = [
     "aorticarch_dir/vesseltrees/**/description.json",
     "aorticarch_dir/vesseltrees/**/mesh/*",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that boot external runtimes such as SOFA",
+    "slow: tests that are intentionally excluded from the fast unit suite",
+]

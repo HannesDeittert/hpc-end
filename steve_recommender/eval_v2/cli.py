@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, TextIO, Tuple
 
+from .force_telemetry import DEFAULT_TIP_THRESHOLD_MM
 from .models import (
     AgentRef,
     AorticArchAnatomy,
@@ -15,6 +16,7 @@ from .models import (
     EvaluationScenario,
     ExecutionPlan,
     FluoroscopySpec,
+    ForceTelemetrySpec,
     ManualTarget,
     PolicySpec,
     VisualizationSpec,
@@ -229,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     run_parser.add_argument("--friction", type=float, default=0.001)
+    run_parser.add_argument(
+        "--tip-threshold-mm",
+        type=float,
+        default=DEFAULT_TIP_THRESHOLD_MM,
+        help=(
+            "Distal tip arc-length threshold in mm for force telemetry "
+            f"(default: {DEFAULT_TIP_THRESHOLD_MM})"
+        ),
+    )
     run_parser.add_argument("--image-frequency-hz", type=float, default=7.5)
     run_parser.add_argument("--image-rot-z-deg", type=float, default=20.0)
     run_parser.add_argument("--image-rot-x-deg", type=float, default=5.0)
@@ -550,6 +561,9 @@ def _handle_run(
         friction=float(args.friction),
         stop_device_at_tree_end=bool(args.stop_device_at_tree_end),
         normalize_action=bool(args.normalize_action),
+        force_telemetry=ForceTelemetrySpec(
+            tip_threshold_mm=float(args.tip_threshold_mm),
+        ),
     )
     job = EvaluationJob(
         name=args.job_name,
