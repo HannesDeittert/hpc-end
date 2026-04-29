@@ -16,7 +16,6 @@ from steve_recommender.eval_v2.models import (
     EvaluationCandidate,
     EvaluationJob,
     EvaluationReport,
-    EvaluationScenario,
     ManualTarget,
     PolicySpec,
     TargetModeDescriptor,
@@ -155,7 +154,9 @@ class _ServiceStub:
             policy=policy,
         )
 
-    def list_candidates(self, *, execution_wire: WireRef, include_cross_wire: bool = True):
+    def list_candidates(
+        self, *, execution_wire: WireRef, include_cross_wire: bool = True
+    ):
         _ = include_cross_wire
         return (
             EvaluationCandidate(
@@ -332,11 +333,15 @@ class CliAdapterTests(unittest.TestCase):
             ((1.0, 2.0, 3.0), (4.0, 5.0, 6.0)),
         )
         self.assertEqual(candidate.policy.name, "manual_policy")
-        self.assertEqual(candidate.policy.checkpoint_path, Path("/tmp/manual_policy.everl"))
+        self.assertEqual(
+            candidate.policy.checkpoint_path, Path("/tmp/manual_policy.everl")
+        )
         self.assertEqual(candidate.policy.source, "explicit")
         self.assertEqual(candidate.policy.trained_on_wire, service.cross_wire)
 
-    def test_run_command_accepts_explicit_environment_and_policy_seed_lists(self) -> None:
+    def test_run_command_accepts_explicit_environment_and_policy_seed_lists(
+        self,
+    ) -> None:
         service = _ServiceStub()
         stdout = io.StringIO()
 
@@ -458,7 +463,9 @@ class CliAdapterTests(unittest.TestCase):
                 stdout=io.StringIO(),
             )
 
-    def test_run_command_can_select_policy_by_agent_ref_when_names_collide(self) -> None:
+    def test_run_command_can_select_policy_by_agent_ref_when_names_collide(
+        self,
+    ) -> None:
         class _AmbiguousServiceStub(_ServiceStub):
             def __init__(self) -> None:
                 super().__init__()
@@ -467,14 +474,18 @@ class CliAdapterTests(unittest.TestCase):
                     checkpoint_path=Path("/tmp/shared_policy_registry.everl"),
                     trained_on_wire=self.execution_wire,
                     source="registry",
-                    registry_agent=AgentRef(wire=self.execution_wire, agent="registry_agent"),
+                    registry_agent=AgentRef(
+                        wire=self.execution_wire, agent="registry_agent"
+                    ),
                 )
                 self.same_name_explicit = PolicySpec(
                     name="shared_policy",
                     checkpoint_path=Path("/tmp/shared_policy_explicit.everl"),
                     trained_on_wire=self.execution_wire,
                     source="explicit",
-                    registry_agent=AgentRef(wire=self.execution_wire, agent="explicit_agent"),
+                    registry_agent=AgentRef(
+                        wire=self.execution_wire, agent="explicit_agent"
+                    ),
                 )
 
             def list_registry_policies(self, *, execution_wire=None):
@@ -515,7 +526,9 @@ class CliAdapterTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(len(service.jobs), 1)
-        self.assertEqual(service.jobs[0].candidates[0].policy, service.same_name_explicit)
+        self.assertEqual(
+            service.jobs[0].candidates[0].policy, service.same_name_explicit
+        )
         self.assertIn("summaries=1", stdout.getvalue())
 
     def test_run_command_builds_visualization_execution_settings(self) -> None:
@@ -602,7 +615,9 @@ class CliAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(rc, 0)
-        self.assertAlmostEqual(service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm, 7.5)
+        self.assertAlmostEqual(
+            service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm, 7.5
+        )
 
     def test_cli_uses_default_tip_threshold(self) -> None:
         service = _ServiceStub()
@@ -631,6 +646,58 @@ class CliAdapterTests(unittest.TestCase):
             service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm,
             DEFAULT_TIP_THRESHOLD_MM,
         )
+
+    def test_cli_no_write_trace_flag_sets_spec_to_false(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--no-write-trace",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertFalse(service.jobs[0].scenarios[0].force_telemetry.write_full_trace)
+
+    def test_cli_write_diagnostics_flag_sets_spec_to_true(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--write-diagnostics",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(service.jobs[0].scenarios[0].force_telemetry.write_diagnostics)
 
     def test_run_command_rejects_parallel_visualization(self) -> None:
         service = _ServiceStub()

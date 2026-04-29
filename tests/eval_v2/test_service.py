@@ -7,6 +7,9 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+import pyvista as pv
+
 from steve_recommender.eval_v2.models import (
     AnatomyBranch,
     AorticArchAnatomy,
@@ -26,13 +29,13 @@ from steve_recommender.eval_v2.models import (
     TrialTelemetrySummary,
     WireRef,
 )
-from steve_recommender.eval_v2.runtime import PreparedEvaluationRuntime
 from steve_recommender.eval_v2.service import (
     DefaultEvaluationService,
     LocalEvaluationRunner,
     _ParallelTrialTask,
     _ParallelTrialOutcome,
     _run_parallel_trial_tasks_process,
+    pre_write_meshes_for_job,
 )
 
 
@@ -48,7 +51,9 @@ def _policy(name: str, trained_on_wire: WireRef | None) -> PolicySpec:
     )
 
 
-def _candidate(name: str, execution_wire: WireRef, policy: PolicySpec) -> EvaluationCandidate:
+def _candidate(
+    name: str, execution_wire: WireRef, policy: PolicySpec
+) -> EvaluationCandidate:
     return EvaluationCandidate(
         name=name,
         execution_wire=execution_wire,
@@ -60,6 +65,30 @@ def _scenario(name: str = "scenario_a") -> EvaluationScenario:
     return EvaluationScenario(
         name=name,
         anatomy=AorticArchAnatomy(arch_type="II", seed=42),
+        target=BranchEndTarget(threshold_mm=5.0, branches=("lcca",)),
+    )
+
+
+def _write_source_mesh(path: Path) -> None:
+    mesh = pv.PolyData(
+        np.asarray(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float32,
+        ),
+        np.asarray([3, 0, 1, 2], dtype=np.int64),
+    )
+    mesh.save(path)
+
+
+def _scenario_with_mesh(name: str, mesh_path: Path) -> EvaluationScenario:
+    return EvaluationScenario(
+        name=name,
+        anatomy=AorticArchAnatomy(
+            arch_type="II",
+            seed=42,
+            record_id="Tree_00",
+            simulation_mesh_path=mesh_path,
+        ),
         target=BranchEndTarget(threshold_mm=5.0, branches=("lcca",)),
     )
 
@@ -308,8 +337,11 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                 scoring=ScoringSpec(),
                 registry_path=Path("/tmp/unused_registry.json"),
                 policy_device="cpu",
+                output_dir=Path("/tmp/eval_outputs/job_parallel"),
             )
-            for trial_index, (seed, policy_seed) in enumerate(execution.trial_seed_pairs)
+            for trial_index, (seed, policy_seed) in enumerate(
+                execution.trial_seed_pairs
+            )
         )
         progress_events: list[str] = []
 
@@ -326,11 +358,19 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertIn("parallel_start workers=2 total=3", progress_events)
         self.assertIn("parallel_end completed=3 total=3", progress_events)
         self.assertEqual(
-            len([event for event in progress_events if event.startswith("parallel_trial_done")]),
+            len(
+                [
+                    event
+                    for event in progress_events
+                    if event.startswith("parallel_trial_done")
+                ]
+            ),
             3,
         )
 
-    def test_run_evaluation_job_aggregates_trials_into_candidate_summaries(self) -> None:
+    def test_run_evaluation_job_aggregates_trials_into_candidate_summaries(
+        self,
+    ) -> None:
         execution_wire = _wire("steve_default", "standard_j")
         policy = _policy("policy_a", execution_wire)
         candidate = _candidate("candidate_a", execution_wire, policy)
@@ -348,12 +388,21 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             output_root=Path("/tmp/eval_outputs"),
         )
 
-        runtime_factory_calls: list[tuple[EvaluationCandidate, EvaluationScenario, str]] = []
+        runtime_factory_calls: list[
+            tuple[EvaluationCandidate, EvaluationScenario, str]
+        ] = []
         trial_runner_calls: list[tuple[int, int]] = []
         play_policy = _Closable()
         intervention = _Closable()
 
-        def runtime_factory(*, candidate, scenario, simulation=None, registry_path=None, policy_device="cpu"):
+        def runtime_factory(
+            *,
+            candidate,
+            scenario,
+            simulation=None,
+            registry_path=None,
+            policy_device="cpu",
+        ):
             _ = simulation, registry_path
             runtime_factory_calls.append((candidate, scenario, policy_device))
             return _RuntimeStub(
@@ -370,10 +419,18 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             seed,
             execution,
             scoring,
+            output_dir=None,
             frame_callback=None,
             progress_callback=None,
         ):
-            _ = runtime, execution, scoring, frame_callback, progress_callback
+            _ = (
+                runtime,
+                execution,
+                scoring,
+                output_dir,
+                frame_callback,
+                progress_callback,
+            )
             trial_runner_calls.append((trial_index, seed))
             if trial_index == 0:
                 return _trial(
@@ -426,7 +483,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertEqual(report.job_name, "job_a")
         self.assertEqual(report.generated_at, "2026-04-20T12:00:00+00:00")
         self.assertEqual(len(report.trials), 2)
-        self.assertEqual(report.artifacts.output_dir, Path("/tmp/eval_outputs") / "job_a")
+        self.assertEqual(
+            report.artifacts.output_dir, Path("/tmp/eval_outputs") / "job_a"
+        )
         self.assertEqual(len(report.summaries), 1)
 
         summary = report.summaries[0]
@@ -446,7 +505,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertAlmostEqual(summary.wall_force_max_mean_newton, 0.2)
         self.assertAlmostEqual(summary.force_available_rate, 0.5)
 
-    def test_run_evaluation_job_reuses_same_seed_schedule_for_all_candidates(self) -> None:
+    def test_run_evaluation_job_reuses_same_seed_schedule_for_all_candidates(
+        self,
+    ) -> None:
         execution_wire_a = _wire("steve_default", "standard_j")
         execution_wire_b = _wire("steve_default", "tight_j")
         policy_a = _policy("policy_a", execution_wire_a)
@@ -472,7 +533,14 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         play_policy = _Closable()
         intervention = _Closable()
 
-        def runtime_factory(*, candidate, scenario, simulation=None, registry_path=None, policy_device="cpu"):
+        def runtime_factory(
+            *,
+            candidate,
+            scenario,
+            simulation=None,
+            registry_path=None,
+            policy_device="cpu",
+        ):
             _ = simulation, registry_path, policy_device
             return _RuntimeStub(
                 candidate=candidate,
@@ -488,12 +556,15 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             seed,
             execution,
             scoring,
+            output_dir=None,
             frame_callback=None,
             progress_callback=None,
         ):
-            _ = scoring, frame_callback, progress_callback
+            _ = scoring, output_dir, frame_callback, progress_callback
             policy_seed = execution.policy_seeds[trial_index]
-            trial_runner_calls.append((runtime.candidate.name, trial_index, seed, policy_seed))
+            trial_runner_calls.append(
+                (runtime.candidate.name, trial_index, seed, policy_seed)
+            )
             return _trial(
                 scenario_name=runtime.scenario.name,
                 candidate_name=runtime.candidate.name,
@@ -548,12 +619,21 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             name="job_fail",
             scenarios=(scenario,),
             candidates=(candidate,),
-            execution=ExecutionPlan(trials_per_candidate=1, base_seed=200, policy_device="cpu"),
+            execution=ExecutionPlan(
+                trials_per_candidate=1, base_seed=200, policy_device="cpu"
+            ),
         )
         play_policy = _Closable()
         intervention = _Closable()
 
-        def runtime_factory(*, candidate, scenario, simulation=None, registry_path=None, policy_device="cpu"):
+        def runtime_factory(
+            *,
+            candidate,
+            scenario,
+            simulation=None,
+            registry_path=None,
+            policy_device="cpu",
+        ):
             _ = candidate, scenario, simulation, registry_path, policy_device
             return _RuntimeStub(
                 candidate=candidate,
@@ -569,10 +649,20 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             seed,
             execution,
             scoring,
+            output_dir=None,
             frame_callback=None,
             progress_callback=None,
         ):
-            _ = runtime, trial_index, seed, execution, scoring, frame_callback, progress_callback
+            _ = (
+                runtime,
+                trial_index,
+                seed,
+                execution,
+                scoring,
+                output_dir,
+                frame_callback,
+                progress_callback,
+            )
             raise RuntimeError("boom")
 
         runner = LocalEvaluationRunner(
@@ -586,7 +676,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertTrue(play_policy.closed)
         self.assertTrue(intervention.closed)
 
-    def test_run_evaluation_job_forwards_frame_and_progress_callbacks_to_trial_runner(self) -> None:
+    def test_run_evaluation_job_forwards_frame_and_progress_callbacks_to_trial_runner(
+        self,
+    ) -> None:
         execution_wire = _wire("steve_default", "standard_j")
         policy = _policy("policy_a", execution_wire)
         candidate = _candidate("candidate_a", execution_wire, policy)
@@ -595,7 +687,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             name="job_callbacks",
             scenarios=(scenario,),
             candidates=(candidate,),
-            execution=ExecutionPlan(trials_per_candidate=1, base_seed=300, policy_device="cpu"),
+            execution=ExecutionPlan(
+                trials_per_candidate=1, base_seed=300, policy_device="cpu"
+            ),
         )
 
         play_policy = _Closable()
@@ -603,7 +697,14 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         frame_events: list[object] = []
         progress_events: list[str] = []
 
-        def runtime_factory(*, candidate, scenario, simulation=None, registry_path=None, policy_device="cpu"):
+        def runtime_factory(
+            *,
+            candidate,
+            scenario,
+            simulation=None,
+            registry_path=None,
+            policy_device="cpu",
+        ):
             _ = candidate, scenario, simulation, registry_path, policy_device
             return _RuntimeStub(
                 candidate=candidate,
@@ -619,10 +720,11 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             seed,
             execution,
             scoring,
+            output_dir=None,
             frame_callback=None,
             progress_callback=None,
         ):
-            _ = runtime, trial_index, seed, execution, scoring
+            _ = runtime, trial_index, seed, execution, scoring, output_dir
             if frame_callback is not None:
                 frame_callback("frame")
             if progress_callback is not None:
@@ -655,7 +757,10 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
 
         self.assertEqual(report.job_name, "job_callbacks")
         self.assertEqual(frame_events, ["frame"])
-        self.assertEqual(progress_events, ["runtime_prepare scenario=scenario_a candidate=candidate_a", "progress"])
+        self.assertEqual(
+            progress_events,
+            ["runtime_prepare scenario=scenario_a candidate=candidate_a", "progress"],
+        )
 
     def test_run_evaluation_job_parallel_path_aggregates_worker_outcomes(self) -> None:
         execution_wire = _wire("steve_default", "standard_j")
@@ -681,7 +786,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         def parallel_task_runner(tasks, *, worker_count, progress_callback=None):
             seen_worker_count.append(worker_count)
             if progress_callback is not None:
-                progress_callback(f"parallel_start workers={worker_count} total={len(tasks)}")
+                progress_callback(
+                    f"parallel_start workers={worker_count} total={len(tasks)}"
+                )
             outcomes = []
             for task in tasks:
                 trial = _trial(
@@ -708,7 +815,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                     )
                 )
             if progress_callback is not None:
-                progress_callback(f"parallel_end completed={len(outcomes)} total={len(tasks)}")
+                progress_callback(
+                    f"parallel_end completed={len(outcomes)} total={len(tasks)}"
+                )
             return tuple(outcomes)
 
         runner = LocalEvaluationRunner(
@@ -716,7 +825,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
             generated_at_factory=lambda: "2026-04-20T12:00:00+00:00",
         )
 
-        report = runner.run_evaluation_job(job, progress_callback=progress_events.append)
+        report = runner.run_evaluation_job(
+            job, progress_callback=progress_events.append
+        )
 
         self.assertEqual(seen_worker_count, [2])
         self.assertEqual(len(report.trials), 3)
@@ -726,7 +837,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertIn("parallel_start workers=2 total=3", progress_events)
         self.assertIn("parallel_end completed=3 total=3", progress_events)
 
-    def test_run_evaluation_job_parallel_path_preserves_policy_seed_schedule(self) -> None:
+    def test_run_evaluation_job_parallel_path_preserves_policy_seed_schedule(
+        self,
+    ) -> None:
         execution_wire = _wire("steve_default", "standard_j")
         policy = _policy("policy_a", execution_wire)
         candidate = _candidate("candidate_a", execution_wire, policy)
@@ -805,9 +918,191 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.run_evaluation_job(job)
 
+    def test_full_job_produces_n_trace_files_for_n_trials(self) -> None:
+        execution_wire_a = _wire("steve_default", "standard_j")
+        execution_wire_b = _wire("steve_default", "tight_j")
+        policy_a = _policy("policy_a", execution_wire_a)
+        policy_b = _policy("policy_b", execution_wire_b)
+        candidate_a = _candidate("candidate_a", execution_wire_a, policy_a)
+        candidate_b = _candidate("candidate_b", execution_wire_b, policy_b)
+        scenario = _scenario("scenario_a")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp) / "outputs"
+            job = EvaluationJob(
+                name="job_trace_count",
+                scenarios=(scenario,),
+                candidates=(candidate_a, candidate_b),
+                execution=ExecutionPlan(
+                    trials_per_candidate=2,
+                    base_seed=123,
+                    policy_device="cpu",
+                ),
+                output_root=output_root,
+            )
+
+            play_policy = _Closable()
+            intervention = _Closable()
+
+            def runtime_factory(
+                *,
+                candidate,
+                scenario,
+                simulation=None,
+                registry_path=None,
+                policy_device="cpu",
+            ):
+                _ = simulation, registry_path, policy_device
+                return _RuntimeStub(
+                    candidate=candidate,
+                    scenario=scenario,
+                    play_policy=play_policy,
+                    intervention=intervention,
+                )
+
+            def trial_runner(
+                *,
+                runtime,
+                trial_index,
+                seed,
+                execution,
+                scoring,
+                output_dir=None,
+                frame_callback=None,
+                progress_callback=None,
+            ):
+                _ = execution, scoring, frame_callback, progress_callback
+                assert output_dir is not None
+                trace_dir = Path(output_dir) / "traces"
+                trace_dir.mkdir(parents=True, exist_ok=True)
+                trace_path = (
+                    trace_dir
+                    / f"trial_{runtime.candidate.name}_{seed}_{trial_index}.h5"
+                )
+                trace_path.write_bytes(b"trace")
+                return _trial(
+                    scenario_name=runtime.scenario.name,
+                    candidate_name=runtime.candidate.name,
+                    execution_wire=runtime.candidate.execution_wire,
+                    policy=runtime.candidate.policy,
+                    trial_index=trial_index,
+                    seed=seed,
+                    success=True,
+                    score_total=1.0,
+                    steps_total=5,
+                    steps_to_success=5,
+                    tip_speed_max_mm_s=10.0,
+                    force_available_for_score=False,
+                )
+
+            runner = LocalEvaluationRunner(
+                runtime_factory=runtime_factory,
+                trial_runner=trial_runner,
+            )
+
+            runner.run_evaluation_job(job)
+
+            trace_files = sorted(
+                (output_root / "job_trace_count" / "traces").glob("*.h5")
+            )
+            self.assertEqual(len(trace_files), 4)
+
+    def test_service_pre_writes_meshes_before_workers(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp) / "outputs"
+            source_mesh_path = Path(tmp) / "source_mesh.vtp"
+            _write_source_mesh(source_mesh_path)
+            scenario = _scenario_with_mesh("scenario_mesh", source_mesh_path)
+            job = EvaluationJob(
+                name="job_mesh_prewrite",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                execution=ExecutionPlan(
+                    trials_per_candidate=1,
+                    base_seed=123,
+                    policy_device="cpu",
+                    worker_count=2,
+                ),
+                output_root=output_root,
+            )
+            observed_mesh_state: list[tuple[bool, float]] = []
+
+            def parallel_task_runner(tasks, *, worker_count, progress_callback=None):
+                _ = worker_count, progress_callback
+                mesh_path = (
+                    output_root / "job_mesh_prewrite" / "meshes" / "anatomy_Tree_00.h5"
+                )
+                observed_mesh_state.append(
+                    (mesh_path.exists(), mesh_path.stat().st_mtime)
+                )
+                return tuple(
+                    _ParallelTrialOutcome(
+                        scenario_index=task.scenario_index,
+                        candidate_index=task.candidate_index,
+                        trial_index=task.trial_index,
+                        trial=_trial(
+                            scenario_name=task.scenario.name,
+                            candidate_name=task.candidate.name,
+                            execution_wire=task.candidate.execution_wire,
+                            policy=task.candidate.policy,
+                            trial_index=task.trial_index,
+                            seed=task.seed,
+                            policy_seed=task.policy_seed,
+                            success=True,
+                            score_total=1.0,
+                            steps_total=5,
+                            steps_to_success=5,
+                            tip_speed_max_mm_s=10.0,
+                            force_available_for_score=False,
+                        ),
+                    )
+                    for task in tasks
+                )
+
+            runner = LocalEvaluationRunner(parallel_task_runner=parallel_task_runner)
+            runner.run_evaluation_job(job)
+
+            self.assertEqual(len(observed_mesh_state), 1)
+            self.assertTrue(observed_mesh_state[0][0])
+
+    def test_meshes_written_once_per_anatomy_not_per_trial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "job_mesh_once"
+            source_mesh_path = Path(tmp) / "source_mesh.vtp"
+            _write_source_mesh(source_mesh_path)
+            scenario = _scenario_with_mesh("scenario_mesh", source_mesh_path)
+            job = EvaluationJob(
+                name="job_mesh_once",
+                scenarios=(scenario,),
+                candidates=(
+                    _candidate(
+                        "candidate_a",
+                        _wire("steve_default", "standard_j"),
+                        _policy("policy_a", _wire("steve_default", "standard_j")),
+                    ),
+                ),
+                execution=ExecutionPlan(
+                    trials_per_candidate=4,
+                    base_seed=123,
+                    policy_device="cpu",
+                ),
+                output_root=Path(tmp),
+            )
+
+            written = pre_write_meshes_for_job(job, output_dir)
+
+            self.assertEqual(len(written), 1)
+            self.assertEqual(len(list((output_dir / "meshes").glob("*.h5"))), 1)
+
 
 class DefaultEvaluationServiceTests(unittest.TestCase):
-    def test_service_delegates_discovery_target_selection_candidate_building_and_execution(self) -> None:
+    def test_service_delegates_discovery_target_selection_candidate_building_and_execution(
+        self,
+    ) -> None:
         execution_wire = _wire("steve_default", "standard_j")
         cross_wire = _wire("universal_ii", "standard_j")
         anatomy = AorticArchAnatomy(
@@ -852,8 +1147,12 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
             (same_wire_policy,),
         )
         self.assertEqual(service.list_explicit_policies(), (explicit_policy,))
-        self.assertEqual(service.list_branches(anatomy), target_discovery.list_branches(anatomy))
-        self.assertEqual(service.list_target_modes(), target_discovery.list_target_modes())
+        self.assertEqual(
+            service.list_branches(anatomy), target_discovery.list_branches(anatomy)
+        )
+        self.assertEqual(
+            service.list_target_modes(), target_discovery.list_target_modes()
+        )
 
         built = service.build_candidate(
             name="manual_candidate",
@@ -872,8 +1171,12 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
 
         self.assertEqual(len(all_candidates), 3)
         self.assertEqual(len(no_cross_wire), 2)
-        self.assertTrue(any(candidate.policy == cross_wire_policy for candidate in all_candidates))
-        self.assertFalse(any(candidate.policy == cross_wire_policy for candidate in no_cross_wire))
+        self.assertTrue(
+            any(candidate.policy == cross_wire_policy for candidate in all_candidates)
+        )
+        self.assertFalse(
+            any(candidate.policy == cross_wire_policy for candidate in no_cross_wire)
+        )
 
         job = EvaluationJob(
             name="job_x",
@@ -956,7 +1259,9 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
 
             self.assertEqual(artifacts.output_dir, output_root / "job_outputs")
 
-            with artifacts.summary_csv_path.open("r", encoding="utf-8", newline="") as handle:
+            with artifacts.summary_csv_path.open(
+                "r", encoding="utf-8", newline=""
+            ) as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["candidate_name"], "candidate_a")
@@ -1085,7 +1390,9 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                             validation_status="stub",
                             tip_force_available=True,
                             tip_force_validation_status="ok",
-                            tip_force_records=({"wire_collision_dof": 2, "is_tip": True},),
+                            tip_force_records=(
+                                {"wire_collision_dof": 2, "is_tip": True},
+                            ),
                             tip_force_total_vector_N=(0.1, 0.2, 0.3),
                             tip_force_total_norm_N=0.3741657387,
                         ),
@@ -1131,8 +1438,15 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
         self.assertEqual(loaded.summaries[0].candidate_name, "candidate_a")
         assert loaded.trials[0].telemetry.forces is not None
         self.assertTrue(loaded.trials[0].telemetry.forces.tip_force_available)
-        self.assertEqual(loaded.trials[0].telemetry.forces.tip_force_records[0]["wire_collision_dof"], 2)
-        self.assertEqual(loaded.trials[0].telemetry.forces.tip_force_total_vector_N, (0.1, 0.2, 0.3))
+        self.assertEqual(
+            loaded.trials[0].telemetry.forces.tip_force_records[0][
+                "wire_collision_dof"
+            ],
+            2,
+        )
+        self.assertEqual(
+            loaded.trials[0].telemetry.forces.tip_force_total_vector_N, (0.1, 0.2, 0.3)
+        )
 
     def test_save_clinical_feedback_writes_feedback_json_next_to_report(self) -> None:
         execution_wire = _wire("steve_default", "standard_j")

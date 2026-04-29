@@ -20,6 +20,8 @@ from steve_recommender.eval_v2.models import (
     EvaluationCandidate,
     EvaluationScenario,
     ExecutionPlan,
+    ForceTelemetrySpec,
+    ForceTelemetrySummary,
     ManualTarget,
     PolicySpec,
     ScoringSpec,
@@ -27,12 +29,17 @@ from steve_recommender.eval_v2.models import (
     VisualizationSpec,
     WireRef,
 )
+from steve_recommender.eval_v2.force_telemetry import ForceRuntimeStatus
+from steve_recommender.eval_v2.force_trace_persistence import TraceReader
 from steve_recommender.eval_v2.runner import (
     _reset_play_policy,
     build_single_trial_env,
     run_single_trial,
 )
-from steve_recommender.eval_v2.runtime import PreparedEvaluationRuntime, build_intervention
+from steve_recommender.eval_v2.runtime import (
+    PreparedEvaluationRuntime,
+    build_intervention,
+)
 
 
 def _has_runtime_module(name: str) -> bool:
@@ -115,6 +122,54 @@ class _ResettableComponent:
         self.reset_calls += 1
 
 
+class _TraceCollectorStub:
+    def __init__(self, *, spec, action_dt_s) -> None:
+        _ = spec, action_dt_s
+        self._wire_force_records = []
+        self._triangle_force_records = []
+
+    def ensure_runtime(self, intervention) -> ForceRuntimeStatus:
+        _ = intervention
+        return ForceRuntimeStatus(configured=True, source="stub")
+
+    def capture_step(self, intervention, step_index: int) -> None:
+        _ = intervention
+        self._wire_force_records.append(
+            {
+                "timestep": step_index,
+                "wire_collision_dof": step_index % 2,
+                "row_idx": -1,
+                "fx_N": 0.4,
+                "fy_N": 0.5,
+                "fz_N": 0.6,
+                "norm_N": float(
+                    np.linalg.norm(np.asarray([0.4, 0.5, 0.6], dtype=np.float32))
+                ),
+                "arc_length_from_distal_mm": 1.5,
+                "is_tip": True,
+            }
+        )
+        self._triangle_force_records.append(
+            {
+                "timestep": step_index,
+                "triangle_id": 100 + step_index,
+                "fx_N": 0.1,
+                "fy_N": 0.2,
+                "fz_N": 0.3,
+                "norm_N": float(
+                    np.linalg.norm(np.asarray([0.1, 0.2, 0.3], dtype=np.float32))
+                ),
+                "contributing_rows": 1,
+            }
+        )
+
+    def build_summary(self) -> ForceTelemetrySummary:
+        return ForceTelemetrySummary(
+            available_for_score=False,
+            validation_status="unavailable",
+        )
+
+
 class RunnerPolicyResetTests(unittest.TestCase):
     def test_reset_play_policy_resets_wrapped_policy_components(self) -> None:
         play_policy = StubPlayPolicy()
@@ -193,7 +248,9 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         return EvaluationCandidate(
             name="candidate_a",
             execution_wire=WireRef(model="steve_default", wire="standard_j"),
-            policy=PolicySpec(name="policy_stub", checkpoint_path=Path("/tmp/policy_stub.everl")),
+            policy=PolicySpec(
+                name="policy_stub", checkpoint_path=Path("/tmp/policy_stub.everl")
+            ),
         )
 
     def _anatomy(self) -> AorticArchAnatomy:
@@ -227,6 +284,31 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
             play_policy=play_policy,
         )
 
+    def _trace_scenario(
+        self,
+        *,
+        write_full_trace: bool = True,
+        write_diagnostics: bool = False,
+    ) -> EvaluationScenario:
+        return EvaluationScenario(
+            name="trace_scenario",
+            anatomy=self._anatomy(),
+            target=ManualTarget(
+                threshold_mm=5.0,
+                targets_vessel_cs=((0.0, 0.0, 0.0),),
+            ),
+            force_telemetry=ForceTelemetrySpec(
+                write_full_trace=write_full_trace,
+                write_diagnostics=write_diagnostics,
+            ),
+        )
+
+    def test_force_telemetry_spec_has_write_full_trace_default_true(self) -> None:
+        self.assertTrue(ForceTelemetrySpec().write_full_trace)
+
+    def test_force_telemetry_spec_has_write_diagnostics_default_false(self) -> None:
+        self.assertFalse(ForceTelemetrySpec().write_diagnostics)
+
     def test_build_single_trial_env_returns_real_steve_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             registry_path = self._write_wire_registry(Path(tmp))
@@ -243,10 +325,15 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
             env = build_single_trial_env(runtime, max_episode_steps=3)
 
         self.assertIsInstance(env, Env)
-        self.assertEqual(tuple(env.observation.observations.keys()), ("tracking", "target", "last_action"))
+        self.assertEqual(
+            tuple(env.observation.observations.keys()),
+            ("tracking", "target", "last_action"),
+        )
         self.assertEqual(env.action_space.shape, (1, 2))
 
-    def test_run_single_trial_returns_successful_trial_result_for_manual_target(self) -> None:
+    def test_run_single_trial_returns_successful_trial_result_for_manual_target(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             registry_path = self._write_wire_registry(Path(tmp))
             play_policy = StubPlayPolicy(eval_action=(0.0, 0.0))
@@ -299,7 +386,9 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(play_policy.flat_states[0].ndim, 1)
         self.assertGreater(play_policy.flat_states[0].size, 0)
 
-    def test_run_single_trial_returns_truncated_result_when_target_is_not_reached(self) -> None:
+    def test_run_single_trial_returns_truncated_result_when_target_is_not_reached(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             registry_path = self._write_wire_registry(Path(tmp))
             play_policy = StubPlayPolicy(eval_action=(0.0, 0.0))
@@ -341,7 +430,9 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(play_policy.reset_calls, 1)
         self.assertEqual(play_policy.eval_calls, 1)
 
-    def test_run_single_trial_records_policy_seed_for_stochastic_policy_mode(self) -> None:
+    def test_run_single_trial_records_policy_seed_for_stochastic_policy_mode(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             registry_path = self._write_wire_registry(Path(tmp))
             play_policy = StubPlayPolicy(exploration_action=(0.0, 0.0))
@@ -380,7 +471,9 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(play_policy.eval_calls, 0)
         self.assertEqual(play_policy.exploration_calls, 1)
 
-    def test_run_single_trial_keeps_environment_rng_isolated_from_policy_seed(self) -> None:
+    def test_run_single_trial_keeps_environment_rng_isolated_from_policy_seed(
+        self,
+    ) -> None:
         class _StochasticPolicy:
             def __init__(self) -> None:
                 self.device = "cpu"
@@ -403,9 +496,7 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
                     high=np.asarray([[35.0, 3.14]], dtype=np.float32),
                 )
                 self.intervention = SimpleNamespace(
-                    fluoroscopy=SimpleNamespace(
-                        image=np.asarray([[1]], dtype=np.uint8)
-                    )
+                    fluoroscopy=SimpleNamespace(image=np.asarray([[1]], dtype=np.uint8))
                 )
 
             def step(self, action: np.ndarray):
@@ -481,9 +572,13 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
             places=12,
         )
         self.assertEqual(len(runtime.play_policy.samples), 2)
-        self.assertNotEqual(runtime.play_policy.samples[0], runtime.play_policy.samples[1])
+        self.assertNotEqual(
+            runtime.play_policy.samples[0], runtime.play_policy.samples[1]
+        )
 
-    def test_run_single_trial_renders_and_closes_visualisation_when_enabled(self) -> None:
+    def test_run_single_trial_renders_and_closes_visualisation_when_enabled(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             registry_path = self._write_wire_registry(Path(tmp))
             play_policy = StubPlayPolicy(eval_action=(0.0, 0.0))
@@ -527,7 +622,9 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(visualisation.render_calls, 1)
         self.assertEqual(visualisation.close_calls, 1)
 
-    def test_run_single_trial_prefers_visualisation_render_frames_when_enabled(self) -> None:
+    def test_run_single_trial_prefers_visualisation_render_frames_when_enabled(
+        self,
+    ) -> None:
         class StubEnv:
             def __init__(self) -> None:
                 self.action_space = SimpleNamespace(
@@ -536,9 +633,7 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
                     high=np.asarray([[35.0, 3.14]], dtype=np.float32),
                 )
                 self.intervention = SimpleNamespace(
-                    fluoroscopy=SimpleNamespace(
-                        image=np.asarray([[1]], dtype=np.uint8)
-                    )
+                    fluoroscopy=SimpleNamespace(image=np.asarray([[1]], dtype=np.uint8))
                 )
                 self.render_calls = 0
 
@@ -684,7 +779,44 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
 
 
 class RunnerActionMappingTests(unittest.TestCase):
-    def _runtime(self, *, normalize_action: bool, play_policy: StubPlayPolicy) -> PreparedEvaluationRuntime:
+    def _write_wire_registry(self, root: Path) -> Path:
+        return SingleTrialRunnerIntegrationTests._write_wire_registry(self, root)
+
+    def _candidate(self) -> EvaluationCandidate:
+        return SingleTrialRunnerIntegrationTests._candidate(self)
+
+    def _anatomy(self) -> AorticArchAnatomy:
+        return SingleTrialRunnerIntegrationTests._anatomy(self)
+
+    def _prepare_runtime(
+        self,
+        *,
+        registry_path: Path,
+        scenario: EvaluationScenario,
+        play_policy: StubPlayPolicy,
+    ) -> PreparedEvaluationRuntime:
+        return SingleTrialRunnerIntegrationTests._prepare_runtime(
+            self,
+            registry_path=registry_path,
+            scenario=scenario,
+            play_policy=play_policy,
+        )
+
+    def _trace_scenario(
+        self,
+        *,
+        write_full_trace: bool = True,
+        write_diagnostics: bool = False,
+    ) -> EvaluationScenario:
+        return SingleTrialRunnerIntegrationTests._trace_scenario(
+            self,
+            write_full_trace=write_full_trace,
+            write_diagnostics=write_diagnostics,
+        )
+
+    def _runtime(
+        self, *, normalize_action: bool, play_policy: StubPlayPolicy
+    ) -> PreparedEvaluationRuntime:
         candidate = EvaluationCandidate(
             name="candidate_a",
             execution_wire=WireRef(model="steve_default", wire="standard_j"),
@@ -719,7 +851,9 @@ class RunnerActionMappingTests(unittest.TestCase):
             play_policy=play_policy,
         )
 
-    def test_run_single_trial_maps_normalized_policy_action_to_env_action_space(self) -> None:
+    def test_run_single_trial_maps_normalized_policy_action_to_env_action_space(
+        self,
+    ) -> None:
         class StubEnv:
             def __init__(self) -> None:
                 self.action_space = SimpleNamespace(
@@ -779,7 +913,9 @@ class RunnerActionMappingTests(unittest.TestCase):
         )
         self.assertAlmostEqual(result.telemetry.tip_speed_max_mm_s, 35.0)
 
-    def test_run_single_trial_keeps_physical_policy_action_when_normalization_is_disabled(self) -> None:
+    def test_run_single_trial_keeps_physical_policy_action_when_normalization_is_disabled(
+        self,
+    ) -> None:
         class StubEnv:
             def __init__(self) -> None:
                 self.action_space = SimpleNamespace(
@@ -914,6 +1050,213 @@ class RunnerActionMappingTests(unittest.TestCase):
         self.assertTrue(any(item.startswith("trial_start") for item in progress))
         self.assertTrue(any(item.startswith("trial_step") for item in progress))
         self.assertTrue(any(item.startswith("trial_end") for item in progress))
+
+    def test_runner_writes_trace_file_per_trial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = self._write_wire_registry(Path(tmp))
+            runtime = self._prepare_runtime(
+                registry_path=registry_path,
+                scenario=self._trace_scenario(write_full_trace=True),
+                play_policy=StubPlayPolicy(eval_action=(0.0, 0.0)),
+            )
+            output_dir = Path(tmp) / "job_output"
+
+            result = run_single_trial(
+                runtime=runtime,
+                trial_index=0,
+                seed=123,
+                execution=ExecutionPlan(
+                    trials_per_candidate=1,
+                    base_seed=123,
+                    max_episode_steps=3,
+                    policy_device="cpu",
+                ),
+                scoring=ScoringSpec(),
+                output_dir=output_dir,
+            )
+
+            self.assertIsNotNone(result.artifacts.trace_h5_path)
+            assert result.artifacts.trace_h5_path is not None
+            self.assertTrue(result.artifacts.trace_h5_path.exists())
+            self.assertEqual(
+                result.artifacts.trace_h5_path.parent, output_dir / "traces"
+            )
+
+    def test_runner_skips_trace_when_write_full_trace_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = self._write_wire_registry(Path(tmp))
+            runtime = self._prepare_runtime(
+                registry_path=registry_path,
+                scenario=self._trace_scenario(write_full_trace=False),
+                play_policy=StubPlayPolicy(eval_action=(0.0, 0.0)),
+            )
+            output_dir = Path(tmp) / "job_output"
+
+            result = run_single_trial(
+                runtime=runtime,
+                trial_index=0,
+                seed=123,
+                execution=ExecutionPlan(
+                    trials_per_candidate=1,
+                    base_seed=123,
+                    max_episode_steps=3,
+                    policy_device="cpu",
+                ),
+                scoring=ScoringSpec(),
+                output_dir=output_dir,
+            )
+
+            self.assertIsNone(result.artifacts.trace_h5_path)
+            self.assertFalse((output_dir / "traces").exists())
+
+    def test_runner_trace_file_contains_expected_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = self._write_wire_registry(Path(tmp))
+            runtime = self._prepare_runtime(
+                registry_path=registry_path,
+                scenario=self._trace_scenario(write_full_trace=True),
+                play_policy=StubPlayPolicy(eval_action=(0.0, 0.0)),
+            )
+            output_dir = Path(tmp) / "job_output"
+
+            result = run_single_trial(
+                runtime=runtime,
+                trial_index=0,
+                seed=123,
+                execution=ExecutionPlan(
+                    trials_per_candidate=1,
+                    base_seed=123,
+                    max_episode_steps=3,
+                    policy_device="cpu",
+                ),
+                scoring=ScoringSpec(),
+                output_dir=output_dir,
+            )
+
+            assert result.artifacts.trace_h5_path is not None
+            with TraceReader(result.artifacts.trace_h5_path) as reader:
+                payload = reader.load_all()
+
+            self.assertEqual(
+                payload["steps"]["step_index"].shape[0],
+                result.telemetry.steps_total,
+            )
+
+    def test_runner_trace_file_contains_scenario_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = self._write_wire_registry(Path(tmp))
+            runtime = self._prepare_runtime(
+                registry_path=registry_path,
+                scenario=self._trace_scenario(write_full_trace=True),
+                play_policy=StubPlayPolicy(eval_action=(0.0, 0.0)),
+            )
+            output_dir = Path(tmp) / "job_output"
+
+            result = run_single_trial(
+                runtime=runtime,
+                trial_index=0,
+                seed=123,
+                execution=ExecutionPlan(
+                    trials_per_candidate=1,
+                    base_seed=123,
+                    max_episode_steps=3,
+                    policy_device="cpu",
+                ),
+                scoring=ScoringSpec(),
+                output_dir=output_dir,
+            )
+
+            assert result.artifacts.trace_h5_path is not None
+            with TraceReader(result.artifacts.trace_h5_path) as reader:
+                payload = reader.load_all()
+
+            self.assertEqual(payload["scenario"]["env_seed"], 123)
+            self.assertEqual(payload["scenario"]["wire_id"], "steve_default/standard_j")
+            self.assertEqual(payload["scenario"]["anatomy_id"], "trace_scenario")
+
+    def test_runner_trace_contains_both_wire_and_triangle_contacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = self._write_wire_registry(Path(tmp))
+            runtime = self._prepare_runtime(
+                registry_path=registry_path,
+                scenario=self._trace_scenario(write_full_trace=True),
+                play_policy=StubPlayPolicy(eval_action=(0.0, 0.0)),
+            )
+            output_dir = Path(tmp) / "job_output"
+
+            with patch(
+                "steve_recommender.eval_v2.runner.EvalV2ForceTelemetryCollector",
+                _TraceCollectorStub,
+            ):
+                result = run_single_trial(
+                    runtime=runtime,
+                    trial_index=0,
+                    seed=123,
+                    execution=ExecutionPlan(
+                        trials_per_candidate=1,
+                        base_seed=123,
+                        max_episode_steps=3,
+                        policy_device="cpu",
+                    ),
+                    scoring=ScoringSpec(),
+                    output_dir=output_dir,
+                )
+
+            assert result.artifacts.trace_h5_path is not None
+            with TraceReader(result.artifacts.trace_h5_path) as reader:
+                wire_contacts = reader.wire_contacts_for_step(0)
+                triangle_contacts = reader.triangle_contacts_for_step(0)
+
+            self.assertEqual(len(wire_contacts), 1)
+            self.assertEqual(len(triangle_contacts), 1)
+
+    def test_runner_handles_recorder_exception_without_failing_trial(self) -> None:
+        class _RecorderThatFails:
+            def __init__(self, *args, **kwargs) -> None:
+                _ = args, kwargs
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+                _ = exc_type, exc_val, exc_tb
+
+            def add_step(self, step_data) -> None:
+                _ = step_data
+                raise OSError("disk full")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = self._write_wire_registry(Path(tmp))
+            runtime = self._prepare_runtime(
+                registry_path=registry_path,
+                scenario=self._trace_scenario(write_full_trace=True),
+                play_policy=StubPlayPolicy(eval_action=(0.0, 0.0)),
+            )
+            output_dir = Path(tmp) / "job_output"
+
+            with patch(
+                "steve_recommender.eval_v2.runner.TrialTraceRecorder",
+                _RecorderThatFails,
+            ):
+                result = run_single_trial(
+                    runtime=runtime,
+                    trial_index=0,
+                    seed=123,
+                    execution=ExecutionPlan(
+                        trials_per_candidate=1,
+                        base_seed=123,
+                        max_episode_steps=3,
+                        policy_device="cpu",
+                    ),
+                    scoring=ScoringSpec(),
+                    output_dir=output_dir,
+                )
+
+            self.assertTrue(result.telemetry.success)
+            self.assertIsNone(result.artifacts.trace_h5_path)
+            self.assertTrue(
+                any("trial_trace_warning" in item for item in result.warnings)
+            )
 
 
 if __name__ == "__main__":

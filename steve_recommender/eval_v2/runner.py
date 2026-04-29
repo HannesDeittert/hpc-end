@@ -4,6 +4,9 @@ import math
 import random
 import time
 from copy import deepcopy
+import json
+import logging
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
@@ -16,7 +19,12 @@ from third_party.stEVE.eve.info import (
     TargetReached as TargetReachedInfo,
     TrajectoryLength,
 )
-from third_party.stEVE.eve.observation import LastAction, ObsDict, Observation, Tracking2D
+from third_party.stEVE.eve.observation import (
+    LastAction,
+    ObsDict,
+    Observation,
+    Tracking2D,
+)
 from third_party.stEVE.eve.observation.wrapper import (
     Memory,
     MemoryResetMode,
@@ -41,6 +49,14 @@ from third_party.stEVE.eve.truncation import (
 from third_party.stEVE.eve.util.coordtransform import tracking3d_to_2d
 
 from .force_telemetry import EvalV2ForceTelemetryCollector
+from .force_trace_persistence import (
+    SceneStaticState,
+    ScenarioConfig,
+    StepData,
+    TriangleContactRecord,
+    TrialTraceRecorder,
+    WireContactRecord,
+)
 from .models import (
     ExecutionPlan,
     ScoringSpec,
@@ -56,6 +72,8 @@ from .visualization import TrialVisualisation, build_trial_visualisation
 TRACKING_POINT_COUNT = 3
 TRACKING_RESOLUTION_MM = 2.0
 TRACKING_MEMORY_STEPS = 2
+IDENTITY_QUATERNION = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+logger = logging.getLogger(__name__)
 
 
 def configure_cpu_eval_threads(thread_count: int = 1) -> None:
@@ -145,7 +163,9 @@ def _reset_play_policy(play_policy: Any) -> None:
 class TargetState2D(Observation):
     """Target observation compatible with branch and manual targets."""
 
-    def __init__(self, runtime: PreparedEvaluationRuntime, name: str = "target2d") -> None:
+    def __init__(
+        self, runtime: PreparedEvaluationRuntime, name: str = "target2d"
+    ) -> None:
         self.name = name
         self.runtime = runtime
         self.obs: np.ndarray | None = None
@@ -333,7 +353,11 @@ def _to_rgb_frame(
         gray = np.ascontiguousarray(image)
         if not np.issubdtype(gray.dtype, np.uint8):
             gray = np.nan_to_num(gray, nan=0.0, posinf=255.0, neginf=0.0)
-            if np.issubdtype(gray.dtype, np.floating) and gray.size > 0 and float(np.max(gray)) <= 1.0:
+            if (
+                np.issubdtype(gray.dtype, np.floating)
+                and gray.size > 0
+                and float(np.max(gray)) <= 1.0
+            ):
                 gray = gray * 255.0
             gray = np.clip(gray, 0.0, 255.0).astype(np.uint8)
         return np.repeat(gray[:, :, np.newaxis], 3, axis=2)
@@ -346,7 +370,11 @@ def _to_rgb_frame(
         single = np.ascontiguousarray(image[:, :, 0])
         if not np.issubdtype(single.dtype, np.uint8):
             single = np.nan_to_num(single, nan=0.0, posinf=255.0, neginf=0.0)
-            if np.issubdtype(single.dtype, np.floating) and single.size > 0 and float(np.max(single)) <= 1.0:
+            if (
+                np.issubdtype(single.dtype, np.floating)
+                and single.size > 0
+                and float(np.max(single)) <= 1.0
+            ):
                 single = single * 255.0
             single = np.clip(single, 0.0, 255.0).astype(np.uint8)
         return np.repeat(single[:, :, np.newaxis], 3, axis=2)
@@ -354,7 +382,11 @@ def _to_rgb_frame(
     rgb = np.ascontiguousarray(image[:, :, :3])
     if not np.issubdtype(rgb.dtype, np.uint8):
         rgb = np.nan_to_num(rgb, nan=0.0, posinf=255.0, neginf=0.0)
-        if np.issubdtype(rgb.dtype, np.floating) and rgb.size > 0 and float(np.max(rgb)) <= 1.0:
+        if (
+            np.issubdtype(rgb.dtype, np.floating)
+            and rgb.size > 0
+            and float(np.max(rgb)) <= 1.0
+        ):
             rgb = rgb * 255.0
         rgb = np.clip(rgb, 0.0, 255.0).astype(np.uint8)
 
@@ -387,7 +419,9 @@ def _select_action(
     execution: ExecutionPlan,
 ) -> np.ndarray:
     if execution.policy_mode == "deterministic":
-        return np.asarray(runtime.play_policy.get_eval_action(flat_state), dtype=np.float32)
+        return np.asarray(
+            runtime.play_policy.get_eval_action(flat_state), dtype=np.float32
+        )
     exploration_action = getattr(runtime.play_policy, "get_exploration_action", None)
     if not callable(exploration_action):
         raise NotImplementedError(
@@ -418,6 +452,168 @@ def _to_env_action(
     return (env_action + 1.0) / 2.0 * (action_high - action_low) + action_low
 
 
+def _trial_trace_component(value: object) -> str:
+    text = str(value)
+    sanitized = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_" for char in text
+    )
+    return sanitized.strip("_") or "value"
+
+
+def _trial_trace_path(
+    *,
+    output_dir: Path,
+    candidate_name: str,
+    env_seed: int,
+    policy_seed: int | None,
+) -> Path:
+    traces_dir = output_dir / "traces"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    policy_seed_component = "none" if policy_seed is None else str(policy_seed)
+    return traces_dir / (
+        "trial_{candidate}_{env_seed}_{policy_seed}.h5".format(
+            candidate=_trial_trace_component(candidate_name),
+            env_seed=env_seed,
+            policy_seed=_trial_trace_component(policy_seed_component),
+        )
+    )
+
+
+def _read_collision_positions_mm(intervention: Any) -> np.ndarray:
+    simulation = getattr(intervention, "simulation", None)
+    root = getattr(simulation, "root", None)
+    collision_obj = None
+    if root is not None:
+        try:
+            collision_obj = getattr(
+                root, "InstrumentCombined"
+            ).CollisionModel.CollisionDOFs
+        except Exception:
+            collision_obj = getattr(root, "CollisionDOFs", None)
+    if collision_obj is not None:
+        position_data = getattr(getattr(collision_obj, "position", None), "value", None)
+        if position_data is not None:
+            collision_positions = np.asarray(position_data, dtype=np.float32).reshape(
+                (-1, 3)
+            )
+            if collision_positions.size > 0:
+                return collision_positions
+    return np.asarray(intervention.simulation.dof_positions, dtype=np.float32).reshape(
+        (-1, 3)
+    )
+
+
+def _triangle_contacts_from_records(
+    records: List[dict[str, Any]],
+) -> tuple[TriangleContactRecord, ...]:
+    return tuple(
+        TriangleContactRecord(
+            timestep=int(record.get("timestep", 0)),
+            triangle_id=int(record.get("triangle_id", -1)),
+            fx_N=float(record.get("fx_N", 0.0)),
+            fy_N=float(record.get("fy_N", 0.0)),
+            fz_N=float(record.get("fz_N", 0.0)),
+            norm_N=float(record.get("norm_N", 0.0)),
+            contributing_rows=int(record.get("contributing_rows", 0)),
+            mapped=bool(record.get("mapped", True)),
+        )
+        for record in records
+    )
+
+
+def _wire_contacts_from_records(
+    records: List[dict[str, Any]],
+) -> tuple[WireContactRecord, ...]:
+    return tuple(
+        WireContactRecord(
+            timestep=int(record.get("timestep", 0)),
+            wire_collision_dof=int(record.get("wire_collision_dof", -1)),
+            row_idx=int(record.get("row_idx", -1)),
+            fx_N=float(record.get("fx_N", 0.0)),
+            fy_N=float(record.get("fy_N", 0.0)),
+            fz_N=float(record.get("fz_N", 0.0)),
+            norm_N=float(record.get("norm_N", 0.0)),
+            arc_length_from_distal_mm=record.get("arc_length_from_distal_mm"),
+            is_tip=bool(record.get("is_tip", False)),
+            world_pos=record.get("world_pos"),
+            fx_scene=record.get("fx_scene"),
+            fy_scene=record.get("fy_scene"),
+            fz_scene=record.get("fz_scene"),
+            norm_scene=record.get("norm_scene"),
+            mapped=bool(record.get("mapped", True)),
+        )
+        for record in records
+    )
+
+
+def _force_norm_from_contacts(
+    wire_contacts: tuple[WireContactRecord, ...],
+    triangle_contacts: tuple[TriangleContactRecord, ...],
+) -> float:
+    if triangle_contacts:
+        total_vector = np.asarray(
+            [[record.fx_N, record.fy_N, record.fz_N] for record in triangle_contacts],
+            dtype=np.float32,
+        ).sum(axis=0)
+    elif wire_contacts:
+        total_vector = np.asarray(
+            [[record.fx_N, record.fy_N, record.fz_N] for record in wire_contacts],
+            dtype=np.float32,
+        ).sum(axis=0)
+    else:
+        total_vector = np.zeros((3,), dtype=np.float32)
+    return float(np.linalg.norm(total_vector))
+
+
+def _tip_force_norm_from_wire_contacts(
+    wire_contacts: tuple[WireContactRecord, ...],
+) -> float:
+    tip_records = tuple(record for record in wire_contacts if record.is_tip)
+    if not tip_records:
+        return 0.0
+    total_vector = np.asarray(
+        [[record.fx_N, record.fy_N, record.fz_N] for record in tip_records],
+        dtype=np.float32,
+    ).sum(axis=0)
+    return float(np.linalg.norm(total_vector))
+
+
+def _build_trial_trace_scenario(
+    *,
+    runtime: PreparedEvaluationRuntime,
+    seed: int,
+    policy_seed: int | None,
+    execution: ExecutionPlan,
+) -> ScenarioConfig:
+    anatomy = runtime.scenario.anatomy
+    anatomy_id = anatomy.record_id or runtime.scenario.name
+    return ScenarioConfig(
+        anatomy_id=anatomy_id,
+        wire_id=runtime.candidate.execution_wire.tool_ref,
+        target_spec_json=json.dumps(
+            runtime.scenario.target.__dict__, sort_keys=True, default=str
+        ),
+        env_seed=seed,
+        policy_seed=policy_seed,
+        dt_s=runtime.scenario.action_dt_s,
+        friction_mu=runtime.scenario.friction,
+        tip_threshold_mm=runtime.scenario.force_telemetry.tip_threshold_mm,
+        max_episode_steps=execution.max_episode_steps,
+        mesh_ref=f"../meshes/anatomy_{anatomy_id}.h5",
+        eval_v2_sha="unknown",
+        sofa_version="unknown",
+    )
+
+
+def _build_scene_static_state(runtime: PreparedEvaluationRuntime) -> SceneStaticState:
+    return SceneStaticState(
+        wire_initial_position_mm=np.asarray(
+            runtime.intervention.simulation.dof_positions, dtype=np.float32
+        ).reshape((-1, 3)),
+        wire_initial_rotation_quat=np.array(IDENTITY_QUATERNION, copy=True),
+    )
+
+
 def run_single_trial(
     *,
     runtime: PreparedEvaluationRuntime,
@@ -425,6 +621,7 @@ def run_single_trial(
     seed: int,
     execution: ExecutionPlan,
     scoring: ScoringSpec,
+    output_dir: Optional[Path] = None,
     frame_callback: Optional[Callable[[np.ndarray], None]] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> TrialResult:
@@ -455,10 +652,9 @@ def run_single_trial(
     try:
         observation, info = _reset_single_trial_env(env, seed=seed)
         _reset_play_policy(runtime.play_policy)
+        trial_warnings: list[str] = []
         policy_rng_state = (
-            None
-            if policy_seed is None
-            else _build_seeded_random_state(policy_seed)
+            None if policy_seed is None else _build_seeded_random_state(policy_seed)
         )
         force_collector = EvalV2ForceTelemetryCollector(
             spec=runtime.scenario.force_telemetry,
@@ -470,6 +666,36 @@ def run_single_trial(
                 "Force telemetry is required but could not be configured: "
                 f"{force_status.source} ({force_status.error})"
             )
+        recorder: TrialTraceRecorder | None = None
+        trace_path: Path | None = None
+        if runtime.scenario.force_telemetry.write_full_trace and output_dir is not None:
+            trace_path = _trial_trace_path(
+                output_dir=Path(output_dir),
+                candidate_name=runtime.candidate.name,
+                env_seed=seed,
+                policy_seed=policy_seed,
+            )
+            try:
+                recorder = TrialTraceRecorder(
+                    path=trace_path,
+                    scenario=_build_trial_trace_scenario(
+                        runtime=runtime,
+                        seed=seed,
+                        policy_seed=policy_seed,
+                        execution=execution,
+                    ),
+                    scene_static=_build_scene_static_state(runtime),
+                )
+                recorder.__enter__()
+            except Exception as exc:
+                warning = (
+                    f"trial_trace_warning trial={trial_index} "
+                    f"candidate={runtime.candidate.name} "
+                    f"scenario={runtime.scenario.name} error={exc}"
+                )
+                logger.warning(warning)
+                trial_warnings.append(warning)
+                recorder = None
 
         if progress_callback is not None:
             progress_callback(
@@ -481,16 +707,22 @@ def run_single_trial(
         last_info = dict(info)
         steps_to_success: int | None = None
         wall_time_start = time.perf_counter()
+        wire_record_cursor = 0
+        triangle_record_cursor = 0
 
         for step_index in range(execution.max_episode_steps):
             flat_state = _flatten_observation(observation)
             if policy_rng_state is None:
-                action = _select_action(runtime, flat_state=flat_state, execution=execution)
+                action = _select_action(
+                    runtime, flat_state=flat_state, execution=execution
+                )
             else:
                 rollout_rng_state = _capture_trial_random_state()
                 _restore_trial_random_state(policy_rng_state)
                 try:
-                    action = _select_action(runtime, flat_state=flat_state, execution=execution)
+                    action = _select_action(
+                        runtime, flat_state=flat_state, execution=execution
+                    )
                     policy_rng_state = _capture_trial_random_state()
                 finally:
                     _restore_trial_random_state(rollout_rng_state)
@@ -510,6 +742,59 @@ def run_single_trial(
                 intervention=runtime.intervention,
                 step_index=step_index + 1,
             )
+            if recorder is not None:
+                wire_records_raw = list(
+                    force_collector._wire_force_records[wire_record_cursor:]
+                )
+                triangle_records_raw = list(
+                    force_collector._triangle_force_records[triangle_record_cursor:]
+                )
+                wire_record_cursor = len(force_collector._wire_force_records)
+                triangle_record_cursor = len(force_collector._triangle_force_records)
+                wire_contacts = _wire_contacts_from_records(wire_records_raw)
+                triangle_contacts = _triangle_contacts_from_records(
+                    triangle_records_raw
+                )
+                try:
+                    recorder.add_step(
+                        StepData(
+                            step_index=step_index,
+                            sim_time_s=float(
+                                (step_index + 1) * runtime.scenario.action_dt_s
+                            ),
+                            wire_positions_mm=np.asarray(
+                                runtime.intervention.simulation.dof_positions,
+                                dtype=np.float32,
+                            ).reshape((-1, 3)),
+                            wire_collision_positions_mm=_read_collision_positions_mm(
+                                runtime.intervention
+                            ),
+                            action=np.asarray(env_action, dtype=np.float32).reshape(
+                                (-1,)
+                            ),
+                            total_wall_force_N=_force_norm_from_contacts(
+                                wire_contacts,
+                                triangle_contacts,
+                            ),
+                            tip_force_norm_N=_tip_force_norm_from_wire_contacts(
+                                wire_contacts
+                            ),
+                            contact_count=len(wire_contacts) + len(triangle_contacts),
+                            scoreable=bool(force_status.configured),
+                            wire_contacts=wire_contacts,
+                            triangle_contacts=triangle_contacts,
+                        )
+                    )
+                except Exception as exc:
+                    warning = (
+                        f"trial_trace_warning trial={trial_index} "
+                        f"candidate={runtime.candidate.name} "
+                        f"scenario={runtime.scenario.name} error={exc}"
+                    )
+                    logger.warning(warning)
+                    trial_warnings.append(warning)
+                    recorder.__exit__(type(exc), exc, exc.__traceback__)
+                    recorder = None
             rendered_frame = _render_trial_if_enabled(env, visualisation=visualisation)
             if frame_callback is not None:
                 raw_frame = (
@@ -562,6 +847,9 @@ def run_single_trial(
             max_episode_steps=execution.max_episode_steps,
             scoring=scoring,
         )
+        if recorder is not None:
+            recorder.__exit__(None, None, None)
+            recorder = None
         if progress_callback is not None:
             progress_callback(
                 f"trial_end index={trial_index} success={int(bool(telemetry.success))} steps={telemetry.steps_total}"
@@ -576,8 +864,19 @@ def run_single_trial(
             policy_seed=policy_seed,
             score=score,
             telemetry=telemetry,
-            artifacts=TrialArtifactPaths(),
+            artifacts=TrialArtifactPaths(
+                trace_h5_path=(
+                    trace_path
+                    if trace_path is not None and trace_path.exists()
+                    else None
+                )
+            ),
+            warnings=tuple(trial_warnings),
         )
+    except Exception as exc:
+        if "recorder" in locals() and recorder is not None:
+            recorder.__exit__(type(exc), exc, exc.__traceback__)
+        raise
     finally:
         _close_trial_visualisation(visualisation)
 

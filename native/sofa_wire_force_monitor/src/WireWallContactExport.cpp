@@ -45,6 +45,16 @@ inline unsigned int asFlag(const bool v)
     return v ? 1U : 0U;
 }
 
+inline double squaredDistance(
+    const WireWallContactExport::Vec3& a,
+    const WireWallContactExport::Vec3& b)
+{
+    const auto dx = a[0] - b[0];
+    const auto dy = a[1] - b[1];
+    const auto dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
 inline std::string classifyCollisionModelToken(const std::string& token)
 {
     if (token.find("TriangleCollisionModel") != std::string::npos)
@@ -453,6 +463,7 @@ WireWallContactExport::readMapperIndicesFromMappingObject(
 
 bool WireWallContactExport::collectRecordsFromNode(
     sofa::simulation::Node* node,
+    const MechanicalState* vesselMechanicalState,
     const std::string& nodeTag,
     const unsigned int wallSide,
     const std::string& wallPrimitive,
@@ -492,6 +503,20 @@ bool WireWallContactExport::collectRecordsFromNode(
 
     Vec3List positions;
     if (!readStatePositions3(contactState, positions) || positions.empty())
+    {
+        return false;
+    }
+
+    if (mappingObj == nullptr)
+    {
+        return false;
+    }
+    MechanicalState* mappingInputState = nullptr;
+    if (auto* inputLink = mappingObj->findLink("input"))
+    {
+        mappingInputState = dynamic_cast<MechanicalState*>(inputLink->getLinkedBase());
+    }
+    if (vesselMechanicalState != nullptr && mappingInputState != vesselMechanicalState)
     {
         return false;
     }
@@ -592,13 +617,18 @@ bool WireWallContactExport::collectRecordsFromNode(
             continue;
         }
 
-        // Export one record per explicit constraint row to allow row-domain
-        // deterministic matching in validated force mapping.
+        // Export one record per explicit (triangle, row) contact candidate.
+        // Collision DOF assignment is resolved later against the global
+        // collision MechanicalObject positions, because the contact-node local
+        // indices here belong to the mapped wall-side contact state rather than
+        // the global wire collision DOF numbering.
         for (const int row : uniqueRows)
         {
             ContactRecord rec = baseRec;
             rec.constraintRowValid = true;
             rec.constraintRowIndex = row;
+            rec.collisionDofValid = false;
+            rec.collisionDofIndex = -1;
             out.push_back(rec);
         }
     }
@@ -628,6 +658,14 @@ void WireWallContactExport::updateTelemetry()
 
     IntList vertexToTriangle;
     IntList edgeToTriangle;
+    MechanicalState* vesselMechanicalState = nullptr;
+    if (auto* topoContext = vesselTopo->getContext())
+    {
+        if (auto* topoNode = dynamic_cast<sofa::simulation::Node*>(topoContext))
+        {
+            vesselMechanicalState = dynamic_cast<MechanicalState*>(topoNode->getObject("dofs"));
+        }
+    }
     {
         const auto& triangles = vesselTopo->getTriangles();
         int maxVertexIndex = -1;
@@ -683,23 +721,19 @@ void WireWallContactExport::updateTelemetry()
         }
     }
 
-    sofa::type::vector<ContactRecord> records;
-    records.reserve(64);
     std::unordered_map<int, sofa::type::vector<int>> collisionRowToDofs;
-
-    auto* collisionState = l_collisionMechanicalObject.get();
-    if (collisionState != nullptr)
+    Vec3List collisionPositions;
+    if (auto* collisionState = l_collisionMechanicalObject.get())
     {
-        auto* cData = collisionState->findData("constraint");
-        if (cData == nullptr)
-        {
-            d_status.setValue("warn:collision_constraint_data_missing");
-        }
-        else
+        if (auto* cData = collisionState->findData("constraint"))
         {
             collisionRowToDofs = parseConstraintRowsByRow(cData->getValueString());
         }
+        readStatePositions3(collisionState, collisionPositions);
     }
+
+    sofa::type::vector<ContactRecord> records;
+    records.reserve(64);
 
     struct ContactNodeSpec
     {
@@ -758,6 +792,7 @@ void WireWallContactExport::updateTelemetry()
         }
         collectRecordsFromNode(
             spec.node,
+            vesselMechanicalState,
             spec.tag,
             spec.wallSide,
             spec.wallPrimitive,
@@ -767,59 +802,89 @@ void WireWallContactExport::updateTelemetry()
             records);
     }
 
-    sofa::type::vector<ContactRecord> expandedRecords;
-    expandedRecords.reserve(records.size() * 2);
+    std::unordered_map<int, sofa::type::vector<ContactRecord>> recordsByRow;
+    sofa::type::vector<ContactRecord> recordsWithoutRows;
+    recordsWithoutRows.reserve(records.size());
     for (const auto& rec : records)
     {
         if (!rec.constraintRowValid || rec.constraintRowIndex < 0)
         {
-            ContactRecord outRec = rec;
-            outRec.collisionDofValid = false;
-            outRec.collisionDofIndex = -1;
-            expandedRecords.push_back(outRec);
+            recordsWithoutRows.push_back(rec);
             continue;
         }
-        auto it = collisionRowToDofs.find(rec.constraintRowIndex);
-        if (it == collisionRowToDofs.end() || it->second.empty())
+        recordsByRow[rec.constraintRowIndex].push_back(rec);
+    }
+
+    sofa::type::vector<ContactRecord> matchedRecords;
+    matchedRecords.reserve(records.size());
+    for (const auto& rec : recordsWithoutRows)
+    {
+        matchedRecords.push_back(rec);
+    }
+
+    for (auto& kv : recordsByRow)
+    {
+        const int row = kv.first;
+        auto& rowRecords = kv.second;
+        auto globalIt = collisionRowToDofs.find(row);
+        if (globalIt == collisionRowToDofs.end() || globalIt->second.empty() || collisionPositions.empty())
         {
-            ContactRecord outRec = rec;
-            outRec.collisionDofValid = false;
-            outRec.collisionDofIndex = -1;
-            expandedRecords.push_back(outRec);
-            continue;
-        }
-        std::unordered_set<int> uniqueDofs;
-        for (const int dof : it->second)
-        {
-            if (dof >= 0)
+            for (const auto& rec : rowRecords)
             {
-                uniqueDofs.insert(dof);
+                matchedRecords.push_back(rec);
+            }
+            continue;
+        }
+
+        std::unordered_set<int> uniqueGlobalDofs;
+        sofa::type::vector<int> sortedGlobalDofs;
+        for (const int dof : globalIt->second)
+        {
+            if (dof < 0 || dof >= static_cast<int>(collisionPositions.size()))
+            {
+                continue;
+            }
+            if (uniqueGlobalDofs.insert(dof).second)
+            {
+                sortedGlobalDofs.push_back(dof);
             }
         }
-        if (uniqueDofs.empty())
+        std::sort(sortedGlobalDofs.begin(), sortedGlobalDofs.end());
+        if (sortedGlobalDofs.empty())
         {
-            ContactRecord outRec = rec;
-            outRec.collisionDofValid = false;
-            outRec.collisionDofIndex = -1;
-            expandedRecords.push_back(outRec);
+            for (const auto& rec : rowRecords)
+            {
+                matchedRecords.push_back(rec);
+            }
             continue;
         }
-        sofa::type::vector<int> sortedDofs;
-        sortedDofs.reserve(uniqueDofs.size());
-        for (const int dof : uniqueDofs)
+
+        for (const int dof : sortedGlobalDofs)
         {
-            sortedDofs.push_back(dof);
-        }
-        std::sort(sortedDofs.begin(), sortedDofs.end());
-        for (const int dof : sortedDofs)
-        {
-            ContactRecord outRec = rec;
+            const auto& dofPos = collisionPositions[static_cast<sofa::Size>(dof)];
+            const ContactRecord* bestRec = nullptr;
+            double bestD2 = std::numeric_limits<double>::max();
+            for (const auto& rec : rowRecords)
+            {
+                const double d2 = squaredDistance(rec.wallPoint, dofPos);
+                if (d2 < bestD2)
+                {
+                    bestD2 = d2;
+                    bestRec = &rec;
+                }
+            }
+            if (bestRec == nullptr)
+            {
+                continue;
+            }
+            ContactRecord outRec = *bestRec;
             outRec.collisionDofValid = true;
-            outRec.collisionDofIndex = int(dof);
-            expandedRecords.push_back(outRec);
+            outRec.collisionDofIndex = dof;
+            matchedRecords.push_back(outRec);
         }
     }
-    records.swap(expandedRecords);
+
+    records.swap(matchedRecords);
 
     std::sort(
         records.begin(),

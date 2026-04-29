@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import csv
 import json
+import logging
 import multiprocessing as mp
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields, is_dataclass, replace
@@ -41,9 +42,14 @@ from .models import (
     ForceTelemetrySummary,
     WireRef,
 )
+from .force_trace_persistence import write_anatomy_mesh
 from .runner import configure_cpu_eval_threads, run_single_trial
 from .runtime import PreparedEvaluationRuntime, prepare_evaluation_runtime
 from .target_discovery import AnatomyTargetDiscovery
+from third_party.stEVE.eve.intervention.vesseltree.util.meshing import load_mesh
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,7 @@ class _ParallelTrialTask:
     scoring: ScoringSpec
     registry_path: Path
     policy_device: str
+    output_dir: Path
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,7 @@ def _run_parallel_trial_task(task: _ParallelTrialTask) -> _ParallelTrialOutcome:
             seed=task.seed,
             execution=task.execution,
             scoring=task.scoring,
+            output_dir=task.output_dir,
             frame_callback=None,
             progress_callback=None,
         )
@@ -104,7 +112,9 @@ def _run_parallel_trial_tasks_process(
     tasks: Sequence[_ParallelTrialTask],
     *,
     worker_count: int,
-    task_runner: Callable[[_ParallelTrialTask], _ParallelTrialOutcome] = _run_parallel_trial_task,
+    task_runner: Callable[
+        [_ParallelTrialTask], _ParallelTrialOutcome
+    ] = _run_parallel_trial_task,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[_ParallelTrialOutcome, ...]:
     if not tasks:
@@ -184,9 +194,54 @@ def _maybe_close(obj: object) -> None:
         close()
 
 
+def _anatomy_mesh_output_path(output_dir: Path, anatomy: AorticArchAnatomy) -> Path:
+    anatomy_id = anatomy.record_id or anatomy.arch_type
+    return output_dir / "meshes" / f"anatomy_{anatomy_id}.h5"
+
+
+def _load_mesh_arrays(mesh_path: Path) -> tuple[np.ndarray, np.ndarray]:
+    mesh = load_mesh(str(mesh_path)).extract_surface().triangulate()
+    faces = np.asarray(mesh.faces, dtype=np.int64).reshape((-1, 4))
+    if faces.shape[1] != 4 or np.any(faces[:, 0] != 3):
+        raise ValueError(f"mesh must contain triangle faces only: {mesh_path}")
+    triangle_indices = np.asarray(faces[:, 1:4], dtype=np.int32)
+    vertex_positions = np.asarray(mesh.points, dtype=np.float32).reshape((-1, 3))
+    return triangle_indices, vertex_positions
+
+
+def pre_write_meshes_for_job(job: EvaluationJob, output_dir: Path) -> tuple[Path, ...]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mesh_paths: list[Path] = []
+    written_anatomy_ids: set[str] = set()
+    for scenario in job.scenarios:
+        anatomy = scenario.anatomy
+        anatomy_id = anatomy.record_id or anatomy.arch_type
+        if anatomy_id in written_anatomy_ids:
+            continue
+        written_anatomy_ids.add(anatomy_id)
+        source_mesh_path = anatomy.simulation_mesh_path
+        if source_mesh_path is None:
+            continue
+        triangle_indices, vertex_positions = _load_mesh_arrays(Path(source_mesh_path))
+        mesh_output_path = _anatomy_mesh_output_path(output_dir, anatomy)
+        try:
+            write_anatomy_mesh(
+                mesh_output_path,
+                triangle_indices=triangle_indices,
+                vertex_positions=vertex_positions,
+                anatomy_id=anatomy_id,
+            )
+        except FileExistsError:
+            logger.debug("mesh trace already exists for anatomy %s", anatomy_id)
+        mesh_paths.append(mesh_output_path)
+    return tuple(mesh_paths)
+
+
 def _jsonable(value: Any) -> Any:
     if is_dataclass(value):
-        return {field.name: _jsonable(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _jsonable(getattr(value, field.name)) for field in fields(value)
+        }
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, tuple):
@@ -324,9 +379,11 @@ def summarize_trials(trials: Tuple[TrialResult, ...]) -> CandidateSummary:
         ),
         steps_to_success_mean=_finite_mean(
             tuple(
-                None
-                if trial.telemetry.steps_to_success is None
-                else float(trial.telemetry.steps_to_success)
+                (
+                    None
+                    if trial.telemetry.steps_to_success is None
+                    else float(trial.telemetry.steps_to_success)
+                )
                 for trial in trials
             )
         ),
@@ -335,25 +392,31 @@ def summarize_trials(trials: Tuple[TrialResult, ...]) -> CandidateSummary:
         ),
         wall_force_max_mean=_finite_mean(
             tuple(
-                None
-                if trial.telemetry.forces is None
-                else trial.telemetry.forces.total_force_norm_max
+                (
+                    None
+                    if trial.telemetry.forces is None
+                    else trial.telemetry.forces.total_force_norm_max
+                )
                 for trial in trials
             )
         ),
         wall_force_max_mean_newton=_finite_mean(
             tuple(
-                None
-                if trial.telemetry.forces is None
-                else trial.telemetry.forces.total_force_norm_max_newton
+                (
+                    None
+                    if trial.telemetry.forces is None
+                    else trial.telemetry.forces.total_force_norm_max_newton
+                )
                 for trial in trials
             )
         ),
         force_available_rate=_finite_mean(
             tuple(
-                None
-                if trial.telemetry.forces is None
-                else 1.0 if trial.telemetry.forces.available_for_score else 0.0
+                (
+                    None
+                    if trial.telemetry.forces is None
+                    else 1.0 if trial.telemetry.forces.available_for_score else 0.0
+                )
                 for trial in trials
             )
         ),
@@ -574,7 +637,9 @@ class LocalEvaluationRunner:
         self,
         *,
         registry_path: Path = DEFAULT_WIRE_REGISTRY_PATH,
-        runtime_factory: Callable[..., PreparedEvaluationRuntime] = prepare_evaluation_runtime,
+        runtime_factory: Callable[
+            ..., PreparedEvaluationRuntime
+        ] = prepare_evaluation_runtime,
         trial_runner: Callable[..., TrialResult] = run_single_trial,
         parallel_task_runner: Callable[
             ..., Tuple[_ParallelTrialOutcome, ...]
@@ -594,6 +659,8 @@ class LocalEvaluationRunner:
         frame_callback: Optional[Callable[[np.ndarray], None]] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> EvaluationReport:
+        output_dir = job.output_root / job.name
+        pre_write_meshes_for_job(job, output_dir)
         worker_count = max(1, int(job.execution.worker_count))
         use_parallel = (
             worker_count > 1
@@ -623,7 +690,9 @@ class LocalEvaluationRunner:
         for scenario in job.scenarios:
             for candidate in job.candidates:
                 if isolate_headless_trials:
-                    for trial_index, (seed, _policy_seed) in enumerate(job.execution.trial_seed_pairs):
+                    for trial_index, (seed, _policy_seed) in enumerate(
+                        job.execution.trial_seed_pairs
+                    ):
                         if progress_callback is not None:
                             progress_callback(
                                 "runtime_prepare "
@@ -645,6 +714,7 @@ class LocalEvaluationRunner:
                                 seed=seed,
                                 execution=job.execution,
                                 scoring=job.scoring,
+                                output_dir=output_dir,
                                 frame_callback=frame_callback,
                                 progress_callback=progress_callback,
                             )
@@ -667,13 +737,16 @@ class LocalEvaluationRunner:
                     policy_device=job.execution.policy_device,
                 )
                 try:
-                    for trial_index, (seed, _policy_seed) in enumerate(job.execution.trial_seed_pairs):
+                    for trial_index, (seed, _policy_seed) in enumerate(
+                        job.execution.trial_seed_pairs
+                    ):
                         trial = self._trial_runner(
                             runtime=runtime,
                             trial_index=trial_index,
                             seed=seed,
                             execution=job.execution,
                             scoring=job.scoring,
+                            output_dir=output_dir,
                             frame_callback=frame_callback,
                             progress_callback=progress_callback,
                         )
@@ -700,7 +773,7 @@ class LocalEvaluationRunner:
             generated_at=self._generated_at_factory(),
             summaries=summaries,
             trials=tuple(trials),
-            artifacts=EvaluationArtifacts(output_dir=job.output_root / job.name),
+            artifacts=EvaluationArtifacts(output_dir=output_dir),
         )
 
     def _run_evaluation_job_parallel(
@@ -723,10 +796,13 @@ class LocalEvaluationRunner:
                 scoring=job.scoring,
                 registry_path=self._registry_path,
                 policy_device=job.execution.policy_device,
+                output_dir=job.output_root / job.name,
             )
             for scenario_index, scenario in enumerate(job.scenarios)
             for candidate_index, candidate in enumerate(job.candidates)
-            for trial_index, (seed, policy_seed) in enumerate(job.execution.trial_seed_pairs)
+            for trial_index, (seed, policy_seed) in enumerate(
+                job.execution.trial_seed_pairs
+            )
         )
         outcomes = self._parallel_task_runner(
             tasks,
@@ -888,7 +964,8 @@ class DefaultEvaluationService(EvaluationService):
             policies = tuple(
                 policy
                 for policy in policies
-                if policy.trained_on_wire is None or policy.trained_on_wire == execution_wire
+                if policy.trained_on_wire is None
+                or policy.trained_on_wire == execution_wire
             )
 
         candidates: list[EvaluationCandidate] = []
@@ -948,7 +1025,11 @@ class DefaultEvaluationService(EvaluationService):
             generated_at = str(payload.get("generated_at", ""))
             anatomy = str(archive_metadata.get("anatomy", "unknown"))
             tested_wires_raw = archive_metadata.get("tested_wires", ())
-            tested_wires = tuple(str(wire) for wire in tested_wires_raw) if isinstance(tested_wires_raw, list) else ()
+            tested_wires = (
+                tuple(str(wire) for wire in tested_wires_raw)
+                if isinstance(tested_wires_raw, list)
+                else ()
+            )
 
             summaries.append(
                 HistoricalReportSummary(
@@ -984,11 +1065,19 @@ class DefaultEvaluationService(EvaluationService):
                 score_mean=_to_optional_float(item.get("score_mean")),
                 score_std=_to_optional_float(item.get("score_std")),
                 steps_total_mean=_to_optional_float(item.get("steps_total_mean")),
-                steps_to_success_mean=_to_optional_float(item.get("steps_to_success_mean")),
-                tip_speed_max_mean_mm_s=_to_optional_float(item.get("tip_speed_max_mean_mm_s")),
+                steps_to_success_mean=_to_optional_float(
+                    item.get("steps_to_success_mean")
+                ),
+                tip_speed_max_mean_mm_s=_to_optional_float(
+                    item.get("tip_speed_max_mean_mm_s")
+                ),
                 wall_force_max_mean=_to_optional_float(item.get("wall_force_max_mean")),
-                wall_force_max_mean_newton=_to_optional_float(item.get("wall_force_max_mean_newton")),
-                force_available_rate=_to_optional_float(item.get("force_available_rate")),
+                wall_force_max_mean_newton=_to_optional_float(
+                    item.get("wall_force_max_mean_newton")
+                ),
+                force_available_rate=_to_optional_float(
+                    item.get("force_available_rate")
+                ),
             )
             for item in payload.get("summaries", ())
         )
@@ -1034,7 +1123,9 @@ class DefaultEvaluationService(EvaluationService):
         trained_on_wire = policy.trained_on_wire
         if trained_on_wire is None or trained_on_wire == execution_wire:
             return policy.name
-        return f"{policy.name} [{trained_on_wire.tool_ref} -> {execution_wire.tool_ref}]"
+        return (
+            f"{policy.name} [{trained_on_wire.tool_ref} -> {execution_wire.tool_ref}]"
+        )
 
 
 __all__ = [
@@ -1067,7 +1158,9 @@ def _parse_vector3(value: Any) -> tuple[float, float, float]:
 
 def _parse_wire_ref(value: Any) -> WireRef:
     if isinstance(value, dict):
-        return WireRef(model=str(value.get("model", "")), wire=str(value.get("wire", "")))
+        return WireRef(
+            model=str(value.get("model", "")), wire=str(value.get("wire", ""))
+        )
     text = str(value)
     model, wire = text.split("/", maxsplit=1)
     return WireRef(model=model, wire=wire)
@@ -1083,7 +1176,9 @@ def _parse_policy_spec(payload: dict[str, Any]) -> PolicySpec:
     )
 
 
-def _parse_force_telemetry(payload: Optional[dict[str, Any]]) -> Optional[ForceTelemetrySummary]:
+def _parse_force_telemetry(
+    payload: Optional[dict[str, Any]]
+) -> Optional[ForceTelemetrySummary]:
     if not payload:
         return None
     return ForceTelemetrySummary(
@@ -1094,9 +1189,13 @@ def _parse_force_telemetry(payload: Optional[dict[str, Any]]) -> Optional[ForceT
         channel=str(payload.get("channel", "")),
         quality_tier=str(payload.get("quality_tier", "unavailable")),
         association_method=str(payload.get("association_method", "none")),
-        association_explicit_ratio=_to_optional_float(payload.get("association_explicit_ratio")),
+        association_explicit_ratio=_to_optional_float(
+            payload.get("association_explicit_ratio")
+        ),
         association_coverage=_to_optional_float(payload.get("association_coverage")),
-        association_explicit_force_coverage=_to_optional_float(payload.get("association_explicit_force_coverage")),
+        association_explicit_force_coverage=_to_optional_float(
+            payload.get("association_explicit_force_coverage")
+        ),
         ordering_stable=bool(payload.get("ordering_stable", False)),
         active_constraint_any=bool(payload.get("active_constraint_any", False)),
         contact_detected_any=bool(payload.get("contact_detected_any", False)),
@@ -1106,36 +1205,72 @@ def _parse_force_telemetry(payload: Optional[dict[str, Any]]) -> Optional[ForceT
         lcp_sum_abs_mean=_to_optional_float(payload.get("lcp_sum_abs_mean")),
         wire_force_norm_max=_to_optional_float(payload.get("wire_force_norm_max")),
         wire_force_norm_mean=_to_optional_float(payload.get("wire_force_norm_mean")),
-        collision_force_norm_max=_to_optional_float(payload.get("collision_force_norm_max")),
-        collision_force_norm_mean=_to_optional_float(payload.get("collision_force_norm_mean")),
+        collision_force_norm_max=_to_optional_float(
+            payload.get("collision_force_norm_max")
+        ),
+        collision_force_norm_mean=_to_optional_float(
+            payload.get("collision_force_norm_mean")
+        ),
         total_force_norm_max=_to_optional_float(payload.get("total_force_norm_max")),
         total_force_norm_mean=_to_optional_float(payload.get("total_force_norm_mean")),
-        total_force_norm_max_newton=_to_optional_float(payload.get("total_force_norm_max_newton")),
-        total_force_norm_mean_newton=_to_optional_float(payload.get("total_force_norm_mean_newton")),
-        peak_segment_force_norm=_to_optional_float(payload.get("peak_segment_force_norm")),
-        peak_segment_force_norm_newton=_to_optional_float(payload.get("peak_segment_force_norm_newton")),
-        peak_segment_force_step=(None if payload.get("peak_segment_force_step") is None else int(payload.get("peak_segment_force_step"))),
-        peak_segment_force_segment_id=(None if payload.get("peak_segment_force_segment_id") is None else int(payload.get("peak_segment_force_segment_id"))),
-        peak_segment_force_time_s=_to_optional_float(payload.get("peak_segment_force_time_s")),
-        gap_active_projected_count_sum=int(payload.get("gap_active_projected_count_sum", 0)),
-        gap_explicit_mapped_count_sum=int(payload.get("gap_explicit_mapped_count_sum", 0)),
+        total_force_norm_max_newton=_to_optional_float(
+            payload.get("total_force_norm_max_newton")
+        ),
+        total_force_norm_mean_newton=_to_optional_float(
+            payload.get("total_force_norm_mean_newton")
+        ),
+        peak_segment_force_norm=_to_optional_float(
+            payload.get("peak_segment_force_norm")
+        ),
+        peak_segment_force_norm_newton=_to_optional_float(
+            payload.get("peak_segment_force_norm_newton")
+        ),
+        peak_segment_force_step=(
+            None
+            if payload.get("peak_segment_force_step") is None
+            else int(payload.get("peak_segment_force_step"))
+        ),
+        peak_segment_force_segment_id=(
+            None
+            if payload.get("peak_segment_force_segment_id") is None
+            else int(payload.get("peak_segment_force_segment_id"))
+        ),
+        peak_segment_force_time_s=_to_optional_float(
+            payload.get("peak_segment_force_time_s")
+        ),
+        gap_active_projected_count_sum=int(
+            payload.get("gap_active_projected_count_sum", 0)
+        ),
+        gap_explicit_mapped_count_sum=int(
+            payload.get("gap_explicit_mapped_count_sum", 0)
+        ),
         gap_unmapped_count_sum=int(payload.get("gap_unmapped_count_sum", 0)),
         gap_unmapped_ratio=_to_optional_float(payload.get("gap_unmapped_ratio")),
         gap_dominant_class=str(payload.get("gap_dominant_class", "none")),
         gap_contact_mode=str(payload.get("gap_contact_mode", "none")),
         tip_force_available=bool(payload.get("tip_force_available", False)),
-        tip_force_validation_status=str(payload.get("tip_force_validation_status", "unmapped")),
+        tip_force_validation_status=str(
+            payload.get("tip_force_validation_status", "unmapped")
+        ),
         tip_force_records=tuple(payload.get("tip_force_records", ())),
-        tip_force_total_vector_N=_parse_vector3(payload.get("tip_force_total_vector_N")),
+        tip_force_total_vector_N=_parse_vector3(
+            payload.get("tip_force_total_vector_N")
+        ),
         tip_force_total_norm_N=float(payload.get("tip_force_total_norm_N", 0.0)),
-        lcp_mapped_wall_row_count_max=int(payload.get("lcp_mapped_wall_row_count_max", 0)),
-        lcp_contact_export_coverage=_to_optional_float(payload.get("lcp_contact_export_coverage")),
+        lcp_mapped_wall_row_count_max=int(
+            payload.get("lcp_mapped_wall_row_count_max", 0)
+        ),
+        lcp_contact_export_coverage=_to_optional_float(
+            payload.get("lcp_contact_export_coverage")
+        ),
     )
 
 
 def _parse_trial_result(payload: dict[str, Any]) -> TrialResult:
     telemetry_payload = payload.get("telemetry", {})
-    forces_payload = telemetry_payload.get("forces") if isinstance(telemetry_payload, dict) else None
+    forces_payload = (
+        telemetry_payload.get("forces") if isinstance(telemetry_payload, dict) else None
+    )
     return TrialResult(
         scenario_name=str(payload.get("scenario_name", "")),
         candidate_name=str(payload.get("candidate_name", "")),
@@ -1158,16 +1293,38 @@ def _parse_trial_result(payload: dict[str, Any]) -> TrialResult:
         telemetry=TrialTelemetrySummary(
             success=bool(telemetry_payload.get("success", False)),
             steps_total=int(telemetry_payload.get("steps_total", 0)),
-            steps_to_success=(None if telemetry_payload.get("steps_to_success") is None else int(telemetry_payload.get("steps_to_success"))),
+            steps_to_success=(
+                None
+                if telemetry_payload.get("steps_to_success") is None
+                else int(telemetry_payload.get("steps_to_success"))
+            ),
             episode_reward=float(telemetry_payload.get("episode_reward", 0.0)),
             wall_time_s=_to_optional_float(telemetry_payload.get("wall_time_s")),
             sim_time_s=_to_optional_float(telemetry_payload.get("sim_time_s")),
-            path_ratio_last=_to_optional_float(telemetry_payload.get("path_ratio_last")),
-            trajectory_length_last=_to_optional_float(telemetry_payload.get("trajectory_length_last")),
-            average_translation_speed_last=_to_optional_float(telemetry_payload.get("average_translation_speed_last")),
-            tip_speed_max_mm_s=_to_optional_float(telemetry_payload.get("tip_speed_max_mm_s")),
-            tip_speed_mean_mm_s=_to_optional_float(telemetry_payload.get("tip_speed_mean_mm_s")),
+            path_ratio_last=_to_optional_float(
+                telemetry_payload.get("path_ratio_last")
+            ),
+            trajectory_length_last=_to_optional_float(
+                telemetry_payload.get("trajectory_length_last")
+            ),
+            average_translation_speed_last=_to_optional_float(
+                telemetry_payload.get("average_translation_speed_last")
+            ),
+            tip_speed_max_mm_s=_to_optional_float(
+                telemetry_payload.get("tip_speed_max_mm_s")
+            ),
+            tip_speed_mean_mm_s=_to_optional_float(
+                telemetry_payload.get("tip_speed_mean_mm_s")
+            ),
             forces=_parse_force_telemetry(forces_payload),
         ),
-        artifacts=TrialArtifactPaths(),
+        artifacts=TrialArtifactPaths(
+            trace_npz_path=None,
+            trace_h5_path=(
+                None
+                if payload.get("artifacts", {}).get("trace_h5_path") is None
+                else Path(payload.get("artifacts", {}).get("trace_h5_path"))
+            ),
+        ),
+        warnings=tuple(str(item) for item in payload.get("warnings", ())),
     )

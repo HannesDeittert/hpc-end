@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -28,6 +27,7 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QStackedWidget,
 )
 
 from .models import (
@@ -39,12 +39,15 @@ from .models import (
 )
 from .scoring import calculate_overall_score
 from .ui_controller import ClinicalUIController
+from .ui_trace_viewer import TraceViewerPanel
 
 
 class WizardPage(QWidget):
     validation_passed = pyqtSignal(bool)
 
-    def __init__(self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(parent)
         self.controller = controller
         self._is_valid = False
@@ -132,7 +135,9 @@ class Anatomy3DWidget(QWidget):
             if len(points) < 2:
                 continue
             spline = self._pv.Spline(points, len(points))
-            actor = self._plotter.add_mesh(spline, color="#5c7080", opacity=0.45, line_width=3)
+            actor = self._plotter.add_mesh(
+                spline, color="#5c7080", opacity=0.45, line_width=3
+            )
             self._branch_actors[branch.name] = actor
 
         self._plotter.render()
@@ -145,7 +150,9 @@ class Anatomy3DWidget(QWidget):
             if self._selected_branch_name is not None:
                 previous = self._branch_actors.get(self._selected_branch_name)
                 if previous is not None:
-                    self._style_actor(previous, color="#5c7080", opacity=0.45, line_width=3)
+                    self._style_actor(
+                        previous, color="#5c7080", opacity=0.45, line_width=3
+                    )
 
             current = self._branch_actors[branch.name]
             self._style_actor(current, color="#F2AC32", opacity=1.0, line_width=7)
@@ -159,11 +166,15 @@ class Anatomy3DWidget(QWidget):
         if self._branch_actor is not None:
             self._plotter.remove_actor(self._branch_actor)
         spline = self._pv.Spline(points, len(points))
-        self._branch_actor = self._plotter.add_mesh(spline, color="#F2AC32", opacity=1.0, line_width=7)
+        self._branch_actor = self._plotter.add_mesh(
+            spline, color="#F2AC32", opacity=1.0, line_width=7
+        )
         self._plotter.render()
 
     @staticmethod
-    def _style_actor(actor: object, *, color: str, opacity: float, line_width: float) -> None:
+    def _style_actor(
+        actor: object, *, color: str, opacity: float, line_width: float
+    ) -> None:
         prop = None
         try:
             prop = actor.prop
@@ -335,7 +346,9 @@ AnatomyCardWidget[selected="true"] QLabel#anatomyTitle {
 
 
 class AnatomySelectionPage(WizardPage):
-    def __init__(self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(controller=controller, parent=parent)
 
         root = QVBoxLayout(self)
@@ -377,7 +390,9 @@ class AnatomySelectionPage(WizardPage):
             label = anatomy.record_id or f"{anatomy.arch_type}:{anatomy.seed}"
             metadata = f"arch={anatomy.arch_type} seed={anatomy.seed}"
             thumbnail = self._thumbnail_for_anatomy(anatomy)
-            card = AnatomyCardWidget(title=label, metadata=metadata, thumbnail=thumbnail)
+            card = AnatomyCardWidget(
+                title=label, metadata=metadata, thumbnail=thumbnail
+            )
             card.setMinimumSize(220, 240)
             card.clicked.connect(lambda i=idx: self._on_selected(i))
             row = idx // 3
@@ -421,7 +436,9 @@ class AnatomySelectionPage(WizardPage):
             )
             plotter.view_isometric()
             plotter.camera.zoom(1.2)
-            image = np.asarray(plotter.screenshot(return_img=True, window_size=(size, size)))
+            image = np.asarray(
+                plotter.screenshot(return_img=True, window_size=(size, size))
+            )
             plotter.close()
         except Exception:
             return None
@@ -432,10 +449,14 @@ class AnatomySelectionPage(WizardPage):
         image = np.ascontiguousarray(image)
         h, w = image.shape[:2]
         if image.shape[2] == 4:
-            qimg = QImage(image.data, w, h, image.strides[0], QImage.Format_RGBA8888).copy()
+            qimg = QImage(
+                image.data, w, h, image.strides[0], QImage.Format_RGBA8888
+            ).copy()
             return QPixmap.fromImage(qimg)
         if image.shape[2] == 3:
-            qimg = QImage(image.data, w, h, image.strides[0], QImage.Format_RGB888).copy()
+            qimg = QImage(
+                image.data, w, h, image.strides[0], QImage.Format_RGB888
+            ).copy()
             return QPixmap.fromImage(qimg)
         return None
 
@@ -451,7 +472,9 @@ class AnatomySelectionPage(WizardPage):
 
 
 class BranchSelectionPage(WizardPage):
-    def __init__(self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(controller=controller, parent=parent)
 
         root = QHBoxLayout(self)
@@ -539,7 +562,9 @@ QPushButton#branchSelectorButton:checked {
             button = QPushButton(branch.name)
             button.setObjectName("branchSelectorButton")
             button.setCheckable(True)
-            button.toggled.connect(lambda checked, b=branch: self._on_branch_toggled(b, checked))
+            button.toggled.connect(
+                lambda checked, b=branch: self._on_branch_toggled(b, checked)
+            )
             self._radio_layout.addWidget(button)
             self._button_group.addButton(button)
 
@@ -554,7 +579,9 @@ QPushButton#branchSelectorButton:checked {
 
 
 class TargetSelectionPage(WizardPage):
-    def __init__(self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(controller=controller, parent=parent)
 
         root = QHBoxLayout(self)
@@ -769,7 +796,9 @@ WireAccordionCard QWidget#candidateBody {
 
 
 class WireSelectionPage(WizardPage):
-    def __init__(self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(controller=controller, parent=parent)
 
         root = QVBoxLayout(self)
@@ -875,11 +904,15 @@ class WireSelectionPage(WizardPage):
         for wire in self.controller.get_execution_wires():
             if wire.tool_ref not in startable:
                 continue
-            candidates = self.controller.get_candidates(execution_wire=wire, include_cross_wire=False)
+            candidates = self.controller.get_candidates(
+                execution_wire=wire, include_cross_wire=False
+            )
             valid_candidates = [c for c in candidates if self._is_candidate_valid(c)]
             if not valid_candidates:
                 continue
-            grouped.setdefault(wire.model, []).extend((wire, c) for c in valid_candidates)
+            grouped.setdefault(wire.model, []).extend(
+                (wire, c) for c in valid_candidates
+            )
 
         return grouped
 
@@ -904,7 +937,9 @@ class WireSelectionPage(WizardPage):
 
 
 class ExecutionConfigPage(WizardPage):
-    def __init__(self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(controller=controller, parent=parent)
 
         root = QVBoxLayout(self)
@@ -972,13 +1007,19 @@ QSpinBox::down-button:hover {
         container_layout.setSpacing(14)
 
         behavior_title = QLabel("1. Select Simulation Behavior")
-        behavior_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #E6EDF3; margin-bottom: 8px;")
+        behavior_title.setStyleSheet(
+            "font-size: 18px; font-weight: 700; color: #E6EDF3; margin-bottom: 8px;"
+        )
         container_layout.addWidget(behavior_title)
 
         behavior_row = QHBoxLayout()
         behavior_row.setSpacing(12)
-        self.deterministic_card = QPushButton("Deterministic\nStandard baseline evaluation.")
-        self.stochastic_card = QPushButton("Stochastic (Random)\nMultiple runs to analyze variance.")
+        self.deterministic_card = QPushButton(
+            "Deterministic\nStandard baseline evaluation."
+        )
+        self.stochastic_card = QPushButton(
+            "Stochastic (Random)\nMultiple runs to analyze variance."
+        )
         self._mark_feature_card(self.deterministic_card)
         self._mark_feature_card(self.stochastic_card)
         self.deterministic_card.setCheckable(True)
@@ -1013,21 +1054,31 @@ QSpinBox::down-button:hover {
         stochastic_env_mode_layout.setSpacing(10)
         self.stochastic_env_mode_label = QLabel("Stochastic environment:")
         self.stochastic_env_mode_combo = QComboBox()
-        self.stochastic_env_mode_combo.addItem("Random Start, Randomized Policy", "random_start")
-        self.stochastic_env_mode_combo.addItem("Fixed Start, Randomized Policy", "fixed_start")
+        self.stochastic_env_mode_combo.addItem(
+            "Random Start, Randomized Policy", "random_start"
+        )
+        self.stochastic_env_mode_combo.addItem(
+            "Fixed Start, Randomized Policy", "fixed_start"
+        )
         stochastic_env_mode_layout.addWidget(self.stochastic_env_mode_label)
         stochastic_env_mode_layout.addWidget(self.stochastic_env_mode_combo)
         stochastic_env_mode_layout.addStretch(1)
         container_layout.addWidget(self.stochastic_env_mode_row)
 
         execution_title = QLabel("2. Execution Mode")
-        execution_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #E6EDF3; margin-top: 32px; margin-bottom: 8px;")
+        execution_title.setStyleSheet(
+            "font-size: 18px; font-weight: 700; color: #E6EDF3; margin-top: 32px; margin-bottom: 8px;"
+        )
         container_layout.addWidget(execution_title)
 
         execution_row = QHBoxLayout()
         execution_row.setSpacing(12)
-        self.headless_card = QPushButton("Headless Mode\nMaximum performance. Background calculation.")
-        self.live_card = QPushButton("Live Visualization\nWatch the fluoroscopy stream in real-time.")
+        self.headless_card = QPushButton(
+            "Headless Mode\nMaximum performance. Background calculation."
+        )
+        self.live_card = QPushButton(
+            "Live Visualization\nWatch the fluoroscopy stream in real-time."
+        )
         self._mark_feature_card(self.headless_card)
         self._mark_feature_card(self.live_card)
         self.headless_card.setCheckable(True)
@@ -1092,7 +1143,9 @@ QSpinBox::down-button:hover {
         self.visualized_runs_row.setVisible(show_visualized_count)
 
         trials = self.runs_spin.value()
-        visualized_count = 1 if not show_visualized_count else self.visualized_runs_spin.value()
+        visualized_count = (
+            1 if not show_visualized_count else self.visualized_runs_spin.value()
+        )
         state = self.controller.get_wizard_state()
         total_trials = max(1, int(trials) * max(1, len(state.selected_wires)))
         cpu_budget = max(1, int(os.cpu_count() or 1) - 5)
@@ -1101,7 +1154,9 @@ QSpinBox::down-button:hover {
         self.controller.set_wizard_execution_config(
             is_deterministic=is_deterministic,
             trials_per_wire=trials,
-            stochastic_environment_mode=str(self.stochastic_env_mode_combo.currentData()),
+            stochastic_environment_mode=str(
+                self.stochastic_env_mode_combo.currentData()
+            ),
             is_visualized=is_visualized,
             visualized_trials_count=visualized_count,
             worker_count=worker_count,
@@ -1116,7 +1171,9 @@ QSpinBox::down-button:hover {
 class PipelineRunningPage(WizardPage):
     run_finished = pyqtSignal(object)
 
-    def __init__(self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, controller: ClinicalUIController, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(controller=controller, parent=parent)
 
         root = QVBoxLayout(self)
@@ -1136,7 +1193,9 @@ class PipelineRunningPage(WizardPage):
 
         self.visual_status_label = QLabel("Waiting to start...")
         self.visual_status_label.setAlignment(Qt.AlignCenter)
-        self.visual_status_label.setStyleSheet("font-size: 20px; font-weight: 600; color: #E6EDF3;")
+        self.visual_status_label.setStyleSheet(
+            "font-size: 20px; font-weight: 600; color: #E6EDF3;"
+        )
 
         video_row = QHBoxLayout()
         video_row.setContentsMargins(0, 0, 0, 0)
@@ -1192,7 +1251,9 @@ class PipelineRunningPage(WizardPage):
             QSizePolicy.Minimum,
         )
         self.headless_status_label.setMinimumWidth(700)
-        self.headless_status_label.setStyleSheet("font-size: 24px; font-weight: 700; color: #F2AC32;")
+        self.headless_status_label.setStyleSheet(
+            "font-size: 24px; font-weight: 700; color: #F2AC32;"
+        )
 
         self.headless_step_loading_label = QLabel()
         self.headless_step_physics_label = QLabel()
@@ -1316,7 +1377,11 @@ class PipelineRunningPage(WizardPage):
         self.update_frame(np.asarray(frame))
 
     def update_frame(self, frame_array: np.ndarray) -> None:
-        if frame_array is None or not isinstance(frame_array, np.ndarray) or frame_array.size == 0:
+        if (
+            frame_array is None
+            or not isinstance(frame_array, np.ndarray)
+            or frame_array.size == 0
+        ):
             return
 
         if frame_array.ndim == 2:
@@ -1443,7 +1508,9 @@ class WireAttemptRowWidget(QWidget):
         self.delete_button = QPushButton("X")
         self.delete_button.setProperty("class", "DeleteRowBtn")
         self.delete_button.setFixedWidth(24)
-        self.delete_button.clicked.connect(lambda _checked=False: self.remove_requested.emit(self))
+        self.delete_button.clicked.connect(
+            lambda _checked=False: self.remove_requested.emit(self)
+        )
 
         layout.addWidget(self.attempt_label, stretch=0)
         layout.addWidget(self.wire_combo, stretch=1)
@@ -1498,6 +1565,7 @@ class ResultsPage(WizardPage):
         self._is_resetting_weights = False
         self._feedback_wire_options: list[str] = []
         self._feedback_attempt_rows: list[WireAttemptRowWidget] = []
+        self._current_wire_trials: list[object] = []
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -1541,9 +1609,15 @@ class ResultsPage(WizardPage):
         kpi_row_layout.setContentsMargins(0, 0, 0, 0)
         kpi_row_layout.setSpacing(12)
 
-        top_card, self.top_recommendation_value = self._create_kpi_card("Top Recommendation")
-        safety_card, self.highest_safety_value = self._create_kpi_card("Highest Safety Score")
-        speed_card, self.fastest_insertion_value = self._create_kpi_card("Fastest Insertion")
+        top_card, self.top_recommendation_value = self._create_kpi_card(
+            "Top Recommendation"
+        )
+        safety_card, self.highest_safety_value = self._create_kpi_card(
+            "Highest Safety Score"
+        )
+        speed_card, self.fastest_insertion_value = self._create_kpi_card(
+            "Fastest Insertion"
+        )
         kpi_row_layout.addWidget(top_card)
         kpi_row_layout.addWidget(safety_card)
         kpi_row_layout.addWidget(speed_card)
@@ -1566,15 +1640,22 @@ class ResultsPage(WizardPage):
 
         self.leaderboard_table = QTableWidget(0, 6)
         self.leaderboard_table.setHorizontalHeaderLabels(
-            ("Rank", "Wire Name", "Overall Score", "Success Score", "Speed Score", "Safety Score")
+            (
+                "Rank",
+                "Wire Name",
+                "Overall Score",
+                "Success Score",
+                "Speed Score",
+                "Safety Score",
+            )
         )
         self.leaderboard_table.horizontalHeader().setStretchLastSection(True)
         self.leaderboard_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.leaderboard_table.setSelectionMode(QTableWidget.SingleSelection)
 
-        self.deep_dive_table = QTableWidget(0, 4)
+        self.deep_dive_table = QTableWidget(0, 5)
         self.deep_dive_table.setHorizontalHeaderLabels(
-            ("Trial", "Success", "Time (steps)", "Max Force (N)")
+            ("Trial", "Success", "Time (steps)", "Max Force (N)", "Replay")
         )
         self.deep_dive_table.horizontalHeader().setStretchLastSection(True)
 
@@ -1595,7 +1676,12 @@ class ResultsPage(WizardPage):
         details_title = QLabel("Individual Trials")
         details_title.setProperty("textRole", "h2")
         details_layout.addWidget(details_title)
-        details_layout.addWidget(self.deep_dive_table, stretch=1)
+        self._details_stack = QStackedWidget()
+        details_list_page = QWidget()
+        details_list_layout = QVBoxLayout(details_list_page)
+        details_list_layout.setContentsMargins(0, 0, 0, 0)
+        details_list_layout.setSpacing(8)
+        details_list_layout.addWidget(self.deep_dive_table, stretch=1)
 
         self.feedback_group = QGroupBox("Clinical Feedback (Ground Truth)")
         self.feedback_group.setObjectName("ClinicalFeedbackGroup")
@@ -1610,7 +1696,9 @@ class ResultsPage(WizardPage):
         self.feedback_attempts_scroll = QScrollArea()
         self.feedback_attempts_scroll.setObjectName("FeedbackScrollArea")
         self.feedback_attempts_scroll.setWidgetResizable(True)
-        self.feedback_attempts_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.feedback_attempts_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff
+        )
         self.feedback_attempts_container = QWidget()
         self.feedback_attempts_layout = QVBoxLayout(self.feedback_attempts_container)
         self.feedback_attempts_layout.setContentsMargins(0, 0, 0, 0)
@@ -1640,7 +1728,14 @@ class ResultsPage(WizardPage):
         feedback_layout.addWidget(self.feedback_save_button)
         feedback_layout.addWidget(self.feedback_status_label)
         self.feedback_group.setVisible(self._is_from_archive)
-        details_layout.addWidget(self.feedback_group, stretch=0)
+        details_list_layout.addWidget(self.feedback_group, stretch=0)
+
+        self.trace_viewer_panel = TraceViewerPanel()
+        self.trace_viewer_panel.back_requested.connect(self._show_trial_list_panel)
+
+        self._details_stack.addWidget(details_list_page)
+        self._details_stack.addWidget(self.trace_viewer_panel)
+        details_layout.addWidget(self._details_stack, stretch=1)
 
         tables_splitter.addWidget(leaderboard_container)
         tables_splitter.addWidget(details_container)
@@ -1665,10 +1760,13 @@ class ResultsPage(WizardPage):
         self._clear_kpis()
         self._update_score_chart([])
 
-    def set_report(self, report: EvaluationReport, *, is_from_archive: Optional[bool] = None) -> None:
+    def set_report(
+        self, report: EvaluationReport, *, is_from_archive: Optional[bool] = None
+    ) -> None:
         if is_from_archive is not None:
             self._is_from_archive = bool(is_from_archive)
         self.feedback_group.setVisible(self._is_from_archive)
+        self._show_trial_list_panel()
 
         self._report = report
         self._report_id = None
@@ -1679,7 +1777,9 @@ class ResultsPage(WizardPage):
         self.feedback_status_label.setText("")
         self._recalculate_leaderboard()
 
-    def _build_dynamic_weight_controls(self, schema: Dict[str, Dict[str, object]]) -> None:
+    def _build_dynamic_weight_controls(
+        self, schema: Dict[str, Dict[str, object]]
+    ) -> None:
         self._master_sliders.clear()
         self._master_value_labels.clear()
         self._sub_sliders.clear()
@@ -1706,7 +1806,9 @@ class ResultsPage(WizardPage):
             master_label = QLabel("Category Weight")
             master_slider = QSlider(Qt.Horizontal)
             master_slider.setRange(0, 100)
-            master_default = int(round(float(category_config.get("weight", 1.0)) * 100.0))
+            master_default = int(
+                round(float(category_config.get("weight", 1.0)) * 100.0)
+            )
             master_slider.setValue(max(0, min(100, master_default)))
             master_value = QLabel()
             master_value.setMinimumWidth(44)
@@ -1742,7 +1844,9 @@ class ResultsPage(WizardPage):
                     sub_label = QLabel(f"  \u21b3 {metric_name}")
                     sub_slider = QSlider(Qt.Horizontal)
                     sub_slider.setRange(0, 100)
-                    sub_slider.setValue(max(0, min(100, int(round(metric_weight * 100.0)))))
+                    sub_slider.setValue(
+                        max(0, min(100, int(round(metric_weight * 100.0))))
+                    )
                     sub_value = QLabel()
                     sub_value.setMinimumWidth(44)
                     sub_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -1902,8 +2006,14 @@ class ResultsPage(WizardPage):
             return
 
         summaries = list(self._report.summaries)
-        max_steps = max(float(s.steps_to_success_mean or s.steps_total_mean or 0.0) for s in summaries)
-        max_force = max(float(s.wall_force_max_mean_newton or s.wall_force_max_mean or 0.0) for s in summaries)
+        max_steps = max(
+            float(s.steps_to_success_mean or s.steps_total_mean or 0.0)
+            for s in summaries
+        )
+        max_force = max(
+            float(s.wall_force_max_mean_newton or s.wall_force_max_mean or 0.0)
+            for s in summaries
+        )
         axes_weights = self.controller.get_results_axis_weights()
 
         grouped: dict[str, list[tuple[float, dict[str, float], object]]] = {}
@@ -1914,7 +2024,9 @@ class ResultsPage(WizardPage):
                 max_expected_time=max_steps if max_steps > 0.0 else 1.0,
                 safe_force_threshold=max_force if max_force > 0.0 else 1.0,
             )
-            grouped.setdefault(summary.execution_wire.tool_ref, []).append((overall, axes, summary))
+            grouped.setdefault(summary.execution_wire.tool_ref, []).append(
+                (overall, axes, summary)
+            )
 
         rows: list[dict[str, float | str]] = []
         for wire_name, entries in grouped.items():
@@ -1934,7 +2046,9 @@ class ResultsPage(WizardPage):
                     "success": sum(entry[1]["success"] for entry in entries) / count,
                     "speed": sum(entry[1]["speed"] for entry in entries) / count,
                     "safety": sum(entry[1]["safety"] for entry in entries) / count,
-                    "time_steps": (sum(times) / float(len(times))) if times else float("inf"),
+                    "time_steps": (
+                        (sum(times) / float(len(times))) if times else float("inf")
+                    ),
                 }
             )
 
@@ -1950,12 +2064,24 @@ class ResultsPage(WizardPage):
 
         self.leaderboard_table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
-            self.leaderboard_table.setItem(row_index, 0, QTableWidgetItem(str(row_index + 1)))
-            self.leaderboard_table.setItem(row_index, 1, QTableWidgetItem(str(row["wire"])))
-            self.leaderboard_table.setItem(row_index, 2, QTableWidgetItem(f"{float(row['overall']):.4f}"))
-            self.leaderboard_table.setItem(row_index, 3, QTableWidgetItem(f"{float(row['success']):.4f}"))
-            self.leaderboard_table.setItem(row_index, 4, QTableWidgetItem(f"{float(row['speed']):.4f}"))
-            self.leaderboard_table.setItem(row_index, 5, QTableWidgetItem(f"{float(row['safety']):.4f}"))
+            self.leaderboard_table.setItem(
+                row_index, 0, QTableWidgetItem(str(row_index + 1))
+            )
+            self.leaderboard_table.setItem(
+                row_index, 1, QTableWidgetItem(str(row["wire"]))
+            )
+            self.leaderboard_table.setItem(
+                row_index, 2, QTableWidgetItem(f"{float(row['overall']):.4f}")
+            )
+            self.leaderboard_table.setItem(
+                row_index, 3, QTableWidgetItem(f"{float(row['success']):.4f}")
+            )
+            self.leaderboard_table.setItem(
+                row_index, 4, QTableWidgetItem(f"{float(row['speed']):.4f}")
+            )
+            self.leaderboard_table.setItem(
+                row_index, 5, QTableWidgetItem(f"{float(row['safety']):.4f}")
+            )
 
         target_row = 0
         if previously_selected_wire is not None:
@@ -1979,8 +2105,12 @@ class ResultsPage(WizardPage):
         safest = max(rows, key=lambda row: float(row["safety"]))
         fastest = min(rows, key=lambda row: float(row["time_steps"]))
 
-        self.top_recommendation_value.setText(f"{top['wire']}\n{float(top['overall']):.3f}")
-        self.highest_safety_value.setText(f"{safest['wire']}\n{float(safest['safety']):.3f}")
+        self.top_recommendation_value.setText(
+            f"{top['wire']}\n{float(top['overall']):.3f}"
+        )
+        self.highest_safety_value.setText(
+            f"{safest['wire']}\n{float(safest['safety']):.3f}"
+        )
         if float(fastest["time_steps"]) == float("inf"):
             self.fastest_insertion_value.setText(f"{fastest['wire']}\nn/a")
         else:
@@ -2018,7 +2148,9 @@ class ResultsPage(WizardPage):
             wire_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             wire_label.setFixedWidth(250)
             wire_label.setWordWrap(False)
-            wire_label.setText(wire_label.fontMetrics().elidedText(wire_name, Qt.ElideMiddle, 250))
+            wire_label.setText(
+                wire_label.fontMetrics().elidedText(wire_name, Qt.ElideMiddle, 250)
+            )
             wire_label.setToolTip(wire_name)
 
             bar = QProgressBar()
@@ -2054,7 +2186,13 @@ class ResultsPage(WizardPage):
             return
 
         wire_name = str(self._leaderboard_rows[row]["wire"])
-        trials = [trial for trial in self._report.trials if trial.execution_wire.tool_ref == wire_name]
+        trials = [
+            trial
+            for trial in self._report.trials
+            if trial.execution_wire.tool_ref == wire_name
+        ]
+        self._current_wire_trials = list(trials)
+        self._show_trial_list_panel()
 
         self.deep_dive_table.setRowCount(len(trials))
         for idx, trial in enumerate(trials):
@@ -2067,18 +2205,49 @@ class ResultsPage(WizardPage):
             if time_value is None:
                 time_value = trial.telemetry.steps_total
 
-            self.deep_dive_table.setItem(idx, 0, QTableWidgetItem(str(trial.trial_index + 1)))
-            self.deep_dive_table.setItem(idx, 1, QTableWidgetItem(str(bool(trial.telemetry.success))))
+            self.deep_dive_table.setItem(
+                idx, 0, QTableWidgetItem(str(trial.trial_index + 1))
+            )
+            self.deep_dive_table.setItem(
+                idx, 1, QTableWidgetItem(str(bool(trial.telemetry.success)))
+            )
             self.deep_dive_table.setItem(idx, 2, QTableWidgetItem(str(time_value)))
             self.deep_dive_table.setItem(
                 idx,
                 3,
-                QTableWidgetItem("n/a" if force_value is None else f"{float(force_value):.4f}"),
+                QTableWidgetItem(
+                    "n/a" if force_value is None else f"{float(force_value):.4f}"
+                ),
             )
+            view_button = QPushButton("View")
+            trace_path = getattr(trial.artifacts, "trace_h5_path", None)
+            view_button.setEnabled(trace_path is not None)
+            view_button.clicked.connect(
+                lambda _checked=False, trial_index=idx: self._open_trial_trace_by_index(
+                    trial_index
+                )
+            )
+            self.deep_dive_table.setCellWidget(idx, 4, view_button)
+
+    def _open_trial_trace_by_index(self, trial_index: int) -> None:
+        if trial_index < 0 or trial_index >= len(self._current_wire_trials):
+            return
+        trial = self._current_wire_trials[trial_index]
+        trace_path = getattr(trial.artifacts, "trace_h5_path", None)
+        if trace_path is None:
+            return
+        self.trace_viewer_panel.open_trace(Path(trace_path), start_step=0)
+        self._details_stack.setCurrentWidget(self.trace_viewer_panel)
+
+    def _show_trial_list_panel(self) -> None:
+        self.trace_viewer_panel.close_trace()
+        self._details_stack.setCurrentIndex(0)
 
     def _save_feedback(self) -> None:
         if self._report_id is None or self._report is None:
-            self.feedback_status_label.setText("No report context available for feedback.")
+            self.feedback_status_label.setText(
+                "No report context available for feedback."
+            )
             return
 
         attempts: list[dict[str, object]] = []
@@ -2095,7 +2264,9 @@ class ResultsPage(WizardPage):
             )
 
         if not attempts:
-            self.feedback_status_label.setText("Select at least one wire attempt before saving.")
+            self.feedback_status_label.setText(
+                "Select at least one wire attempt before saving."
+            )
             return
 
         payload = {

@@ -1,6 +1,7 @@
-# Force Trace Persistence Schema
+# Force Trace Persistence Schema v1
 
-This document freezes the lightweight trace format used by the eval_v2 force-telemetry TDD work.
+This document freezes the lightweight trace format used by the eval_v2
+force-telemetry TDD work.
 
 ## Version
 
@@ -8,7 +9,8 @@ This document freezes the lightweight trace format used by the eval_v2 force-tel
 
 ## NPZ bundle
 
-The NPZ writer stores dense arrays for the primary sparse record fields and keeps a JSON copy of the original records for exact round-tripping.
+The NPZ writer stores dense arrays for the primary sparse record fields and
+keeps a JSON copy of the original records for exact round-tripping.
 
 ### Required arrays
 
@@ -53,4 +55,5 @@ Each subsequent line is a plain JSON object representing a sparse trace record.
 - Force values are stored in Newtons for persisted trace artefacts.
 - `triangle_*` records describe wall-contact aggregation.
 - `wire_*` records describe collision-DOF aggregation.
-- Sparse records are kept as dictionaries to preserve the collector output without lossy reshaping.
+- Sparse records are kept as dictionaries to preserve the collector output
+  without lossy reshaping.

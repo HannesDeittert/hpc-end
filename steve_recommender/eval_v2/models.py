@@ -326,18 +326,20 @@ class ForceTelemetrySpec:
     `tip_threshold_mm` is an absolute arc length from the distal end of the
     wire, in mm. A collision DOF is classified as tip when its arc-length
     distance from the distal end is less than or equal to this positive
-    threshold.
+    threshold. `write_full_trace` controls always-on per-trial HDF5 trace
+    persistence under `<job_output_dir>/traces/`. `write_diagnostics` controls
+    optional heavy diagnostic groups inside those trace files.
     """
 
     mode: ForceTelemetryMode = "passive"
     required: bool = False
     contact_epsilon: float = 1e-7
     tip_threshold_mm: float = field(default_factory=_default_tip_threshold_mm)
+    write_full_trace: bool = True
+    write_diagnostics: bool = False
     plugin_path: Optional[Path] = None
     units: Optional[ForceUnits] = None
-    calibration: ForceCalibrationPolicy = field(
-        default_factory=ForceCalibrationPolicy
-    )
+    calibration: ForceCalibrationPolicy = field(default_factory=ForceCalibrationPolicy)
 
     def __post_init__(self) -> None:
         _require_non_negative(
@@ -409,12 +411,18 @@ class ExecutionPlan:
         if self.visualization.enabled and self.worker_count > 1:
             raise ValueError("worker_count > 1 is only supported for headless runs")
         _require_non_empty(self.policy_device, field_name="policy_device")
-        if self.explicit_seeds and len(self.explicit_seeds) != self.trials_per_candidate:
+        if (
+            self.explicit_seeds
+            and len(self.explicit_seeds) != self.trials_per_candidate
+        ):
             raise ValueError(
                 "explicit_seeds must match trials_per_candidate "
                 f"({self.trials_per_candidate}), got {len(self.explicit_seeds)}"
             )
-        if self.policy_explicit_seeds and len(self.policy_explicit_seeds) != self.trials_per_candidate:
+        if (
+            self.policy_explicit_seeds
+            and len(self.policy_explicit_seeds) != self.trials_per_candidate
+        ):
             raise ValueError(
                 "policy_explicit_seeds must match trials_per_candidate "
                 f"({self.trials_per_candidate}), got {len(self.policy_explicit_seeds)}"
@@ -439,9 +447,14 @@ class ExecutionPlan:
 
         if self.explicit_seeds:
             return self.explicit_seeds
-        if self.policy_mode == "stochastic" and self.stochastic_environment_mode == "fixed_start":
+        if (
+            self.policy_mode == "stochastic"
+            and self.stochastic_environment_mode == "fixed_start"
+        ):
             return tuple(self.base_seed for _ in range(self.trials_per_candidate))
-        return tuple(self.base_seed + offset for offset in range(self.trials_per_candidate))
+        return tuple(
+            self.base_seed + offset for offset in range(self.trials_per_candidate)
+        )
 
     @property
     def policy_seeds(self) -> Tuple[Optional[int], ...]:
@@ -456,7 +469,10 @@ class ExecutionPlan:
             return tuple(None for _ in range(self.trials_per_candidate))
         if self.policy_explicit_seeds:
             return tuple(int(seed) for seed in self.policy_explicit_seeds)
-        return tuple(self.policy_base_seed + offset for offset in range(self.trials_per_candidate))
+        return tuple(
+            self.policy_base_seed + offset
+            for offset in range(self.trials_per_candidate)
+        )
 
     @property
     def trial_seed_pairs(self) -> Tuple[Tuple[int, Optional[int]], ...]:
@@ -478,7 +494,10 @@ class ExecutionPlan:
             if normalized_index < len(self.explicit_seeds):
                 return int(self.explicit_seeds[normalized_index])
             return int(self.explicit_seeds[-1])
-        if self.policy_mode == "stochastic" and self.stochastic_environment_mode == "fixed_start":
+        if (
+            self.policy_mode == "stochastic"
+            and self.stochastic_environment_mode == "fixed_start"
+        ):
             return int(self.base_seed)
         return int(self.base_seed + normalized_index)
 
@@ -661,6 +680,7 @@ class TrialArtifactPaths:
     """Filesystem artifacts emitted for one executed trial."""
 
     trace_npz_path: Optional[Path] = None
+    trace_h5_path: Optional[Path] = None
     force_gap_json_path: Optional[Path] = None
     force_gap_csv_path: Optional[Path] = None
 
@@ -679,6 +699,7 @@ class TrialResult:
     telemetry: TrialTelemetrySummary
     policy_seed: Optional[int] = None
     artifacts: TrialArtifactPaths = field(default_factory=TrialArtifactPaths)
+    warnings: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

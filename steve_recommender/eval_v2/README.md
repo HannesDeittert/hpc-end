@@ -609,6 +609,14 @@ Rules:
   - a wire collision DOF is counted as tip when its arc-length distance from the
     distal end is less than or equal to this threshold
 
+- `--no-write-trace`
+  - disables the default per-trial HDF5 trace writer
+  - by default every trial writes one trace file under `traces/`
+
+- `--write-diagnostics`
+  - enables optional heavy diagnostic datasets inside each trial trace
+  - defaults to off
+
 - `--image-frequency-hz`
 - `--image-rot-z-deg`
 - `--image-rot-x-deg`
@@ -640,6 +648,27 @@ current practical solution is a wrapper script that invokes `eval_v2.cli run`
 multiple times with the same `--trial-count`, `--base-seed`, `--env-seeds`,
 `--policy-base-seed`, and `--policy-seeds` choices.
 
+### 6.13 Replay viewer
+
+Persisted Phase E trial traces can be replayed directly from the CLI:
+
+```bash
+python -m steve_recommender.eval_v2.viewer /path/to/trial_trace.h5
+python -m steve_recommender.eval_v2.viewer /path/to/job_dir
+python -m steve_recommender.eval_v2.viewer /path/to/trial_trace.h5 --start-step 47 --max-force-n 0.3
+```
+
+Notes:
+
+- passing a job directory opens the first trace under `job_dir/traces/`
+- `--start-step` selects the initial replay step
+- by default the viewer auto-calibrates the triangle-force colormap to the
+  trace's 95th-percentile contact magnitude
+- `--max-force-n` overrides that auto-calibration with a fixed triangle-force
+  colormap upper bound in Newtons
+- the viewer reads the persisted trace through `TraceReader` and reuses the
+  anatomy registry's `simulationmesh.obj` for the vessel mesh
+
 ## 7. Output artifacts
 
 Each run writes a folder under the selected output root.
@@ -655,7 +684,20 @@ Typical contents:
 - `report.md`
   - human-readable summary
 
+- `traces/`
+  - one HDF5 file per trial containing scene metadata, step-major wire state,
+    actions, and split wire/triangle contact tables
+  - the full on-disk schema is documented in
+    [`docs/persistence_schema_v2.md`](/home/hannes-deittert/dev/Uni/master-project/steve_recommender/eval_v2/docs/persistence_schema_v2.md)
+
+- `meshes/`
+  - one pre-written anatomy mesh HDF5 file per unique anatomy in the job
+  - trial traces reference these files via relative `mesh_ref` paths
+
 These outputs are what the archive screen reopens later.
+
+Trace files can be replayed through the standalone viewer CLI or the inline GUI
+replay panel described in sections 6.13 and 8.10.
 
 ## 8. GUI usage
 
@@ -792,6 +834,11 @@ The GUI uses `DEFAULT_TIP_THRESHOLD_MM = 3.0` for distal-tip force aggregation.
 It does not expose this as a field yet; scripted runs can configure the same
 collector setting with `--tip-threshold-mm`.
 
+The GUI also uses `write_full_trace=True` by default through
+`ForceTelemetrySpec`. It does not currently expose the trace-writing toggles;
+scripted runs can disable traces with `--no-write-trace` or enable diagnostics
+with `--write-diagnostics`.
+
 ### 8.8 Live visualization
 
 When live visualization is selected:
@@ -813,6 +860,23 @@ The archive screen:
 - lets you reopen stored reports from disk
 
 The archive flow is implemented in [ui_archive.py](/home/hannes-deittert/dev/Uni/master-project/steve_recommender/eval_v2/ui_archive.py).
+
+### 8.10 Replay viewer
+
+The results page now includes an inline replay path for persisted trial traces.
+
+For each wire, the per-trial table includes a `View` action when a
+`trace_h5_path` is available for that trial. Clicking `View` opens an embedded
+replay panel inside the same results flow:
+
+- the vessel mesh is loaded from the anatomy registry's `simulationmesh.obj`
+- the wire is rendered step-by-step from the persisted `wire_positions`
+- contacted wall triangles are colored by persisted force magnitude in Newtons
+- the user can scrub through steps with the slider and rotate/zoom the 3D scene
+
+The same results-page replay panel is also used when historical reports are
+reopened from the archive, so live runs and archived runs share the same viewer
+path and the same Qt replay-control widget as the standalone CLI window.
 
 ## 9. Recommended experiment patterns
 
@@ -887,6 +951,10 @@ Current limitations to keep in mind:
 4. Visualization cannot be parallelized.
 5. Parallel headless execution currently requires CPU policy inference.
 6. GUI does not expose `tip_threshold_mm`; defaults to 3.0 mm via the constant.
+7. GUI does not expose trace-writing toggles; uses defaults via `ForceTelemetrySpec`.
+8. The replay viewer currently focuses on triangle-force magnitude heatmaps and
+   wire geometry; it does not yet render force-vector arrows or synchronized
+   time-series plots.
 
 ## 11. Practical checklist
 
