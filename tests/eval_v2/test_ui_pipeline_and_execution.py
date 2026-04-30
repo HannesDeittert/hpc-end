@@ -6,14 +6,11 @@ import os
 import threading
 import unittest
 from pathlib import Path
-from dataclasses import replace
 from unittest.mock import patch
 
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QPushButton, QSpinBox, QComboBox
+from PyQt5.QtWidgets import QApplication
 from PyQt5.QtTest import QSignalSpy
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt
 
 from steve_recommender.eval_v2.models import (
     AorticArchAnatomy,

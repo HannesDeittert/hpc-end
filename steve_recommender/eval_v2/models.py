@@ -19,7 +19,7 @@ ForceTelemetryMode = Literal[
     "intrusive_lcp",
     "constraint_projected_si_validated",
 ]
-ScoringMode = Literal["default_v1"]
+ScoringMode = Literal["ranking_v1"]
 
 
 def _require_non_empty(value: str, *, field_name: str) -> None:
@@ -515,37 +515,114 @@ class ExecutionPlan:
 
 
 @dataclass(frozen=True)
-class ScoreWeights:
-    """Category weights used by the current `default_v1` score."""
+class TrialIndicatorSpec:
+    """Hard constraints that decide whether a trial participates in ranking."""
 
-    success: float = 2.0
-    efficiency: float = 1.0
-    safety: float = 1.0
-    smoothness: float = 0.25
-    normalize: bool = True
+    requires_success: bool = True
+    requires_steps_within_episode_limit: bool = True
+    requires_force_available: bool = True
+    requires_force_within_safety_threshold: bool = True
 
 
 @dataclass(frozen=True)
-class ScoreScales:
-    """Scale parameters used by the current `default_v1` score."""
+class ForceScoringSpec:
+    """Force source selection and hard-threshold configuration."""
 
-    force_scale: float = 1.0
-    lcp_scale: float = 1.0
-    speed_scale_mm_s: float = 50.0
+    default_safety_force_source: str = "force_total_norm_max_N"
+    force_max_N: float = 2.0
+    tip_length_mm: float = field(default_factory=_default_tip_threshold_mm)
+    tip_force_definition: str = (
+        "maximum compressive normal contact force within distal tip region"
+    )
+    whole_wire_force_definition: str = (
+        "maximum contact force norm along the entire guidewire during the trial"
+    )
 
     def __post_init__(self) -> None:
-        _require_positive(self.force_scale, field_name="force_scale")
-        _require_positive(self.lcp_scale, field_name="lcp_scale")
-        _require_positive(self.speed_scale_mm_s, field_name="speed_scale_mm_s")
+        _require_non_empty(
+            self.default_safety_force_source,
+            field_name="default_safety_force_source",
+        )
+        _require_positive(self.force_max_N, field_name="force_max_N")
+        _require_positive(self.tip_length_mm, field_name="tip_length_mm")
+
+
+@dataclass(frozen=True)
+class SafetyScoreSpec:
+    """Parameters of the nonlinear safety scoring function."""
+
+    type: str = "nonlinear_product"
+    c: float = 0.30
+    p: float = 2.0
+    k: float = 10.0
+    F50_N: float = 1.55
+    F_max_N: float = 2.0
+
+    def __post_init__(self) -> None:
+        _require_non_empty(self.type, field_name="type")
+        _require_positive(self.p, field_name="p")
+        _require_positive(self.k, field_name="k")
+        _require_positive(self.F50_N, field_name="F50_N")
+        _require_positive(self.F_max_N, field_name="F_max_N")
+
+
+@dataclass(frozen=True)
+class EfficiencyScoreSpec:
+    """Configuration of the efficiency score."""
+
+    type: str = "steps_to_success_normalized_by_max_episode_steps"
+
+    def __post_init__(self) -> None:
+        _require_non_empty(self.type, field_name="type")
+
+
+@dataclass(frozen=True)
+class CandidateScoreSpec:
+    """How valid-trial soft scores are aggregated into one candidate score."""
+
+    lambda_: float = 1.0
+    beta: float = 0.0
+    default_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "score_safety": 0.5,
+            "score_efficiency": 0.5,
+        }
+    )
+    active_components: Tuple[str, ...] = ("score_safety", "score_efficiency")
+
+    def __post_init__(self) -> None:
+        _require_non_negative(self.lambda_, field_name="lambda_")
+        _require_non_negative(self.beta, field_name="beta")
+        if not self.default_weights:
+            raise ValueError("default_weights must not be empty")
+        if not self.active_components:
+            raise ValueError("active_components must not be empty")
+
+
+@dataclass(frozen=True)
+class SmoothnessScoreSpec:
+    """Optional jerk-based smoothness scoring configuration."""
+
+    jerk_scale_mm_s3: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.jerk_scale_mm_s3 is not None:
+            _require_positive(self.jerk_scale_mm_s3, field_name="jerk_scale_mm_s3")
 
 
 @dataclass(frozen=True)
 class ScoringSpec:
-    """Current scoring configuration, grouped for GUI slider control."""
+    """Current eval_v2 scoring configuration persisted into manifest.json."""
 
-    mode: ScoringMode = "default_v1"
-    weights: ScoreWeights = field(default_factory=ScoreWeights)
-    scales: ScoreScales = field(default_factory=ScoreScales)
+    mode: ScoringMode = "ranking_v1"
+    trial_indicator: TrialIndicatorSpec = field(default_factory=TrialIndicatorSpec)
+    force: ForceScoringSpec = field(default_factory=ForceScoringSpec)
+    safety_score: SafetyScoreSpec = field(default_factory=SafetyScoreSpec)
+    efficiency_score: EfficiencyScoreSpec = field(default_factory=EfficiencyScoreSpec)
+    candidate_score: CandidateScoreSpec = field(default_factory=CandidateScoreSpec)
+    smoothness_score: SmoothnessScoreSpec = field(
+        default_factory=SmoothnessScoreSpec
+    )
 
 
 @dataclass(frozen=True)
@@ -599,13 +676,13 @@ class EvaluationJob:
 
 @dataclass(frozen=True)
 class ScoreBreakdown:
-    """Per-trial score and its current component scores."""
+    """Per-trial score and component scores."""
 
     total: float
     success: float
     efficiency: float
-    safety: Optional[float]
-    smoothness: float
+    safety: float
+    smoothness: Optional[float]
 
 
 @dataclass(frozen=True)
@@ -653,6 +730,8 @@ class ForceTelemetrySummary:
     tip_force_records: Tuple[dict, ...] = ()
     tip_force_total_vector_N: Vector3 = (0.0, 0.0, 0.0)
     tip_force_total_norm_N: float = 0.0
+    tip_force_peak_normal_N: Optional[float] = None
+    tip_force_total_mean_N: Optional[float] = None
     lcp_mapped_wall_row_count_max: int = 0
     lcp_contact_export_coverage: Optional[float] = None
 
@@ -672,6 +751,11 @@ class TrialTelemetrySummary:
     average_translation_speed_last: Optional[float] = None
     tip_speed_max_mm_s: Optional[float] = None
     tip_speed_mean_mm_s: Optional[float] = None
+    tip_total_distance_mm: Optional[float] = None
+    tip_acc_p95: Optional[float] = None
+    tip_acc_max: Optional[float] = None
+    tip_jerk_p95: Optional[float] = None
+    tip_jerk_max: Optional[float] = None
     forces: Optional[ForceTelemetrySummary] = None
 
 
@@ -698,6 +782,8 @@ class TrialResult:
     score: ScoreBreakdown
     telemetry: TrialTelemetrySummary
     policy_seed: Optional[int] = None
+    valid_for_ranking: bool = False
+    force_within_safety_threshold: bool = False
     artifacts: TrialArtifactPaths = field(default_factory=TrialArtifactPaths)
     warnings: Tuple[str, ...] = ()
 
@@ -711,15 +797,19 @@ class CandidateSummary:
     execution_wire: WireRef
     trained_on_wire: Optional[WireRef]
     trial_count: int
-    success_rate: Optional[float]
-    score_mean: Optional[float]
-    score_std: Optional[float]
-    steps_total_mean: Optional[float]
-    steps_to_success_mean: Optional[float]
-    tip_speed_max_mean_mm_s: Optional[float]
-    wall_force_max_mean: Optional[float]
-    wall_force_max_mean_newton: Optional[float]
-    force_available_rate: Optional[float]
+    success_rate: Optional[float] = None
+    valid_rate: Optional[float] = None
+    soft_score_mean_valid: Optional[float] = None
+    soft_score_std_valid: Optional[float] = None
+    candidate_score_final: Optional[float] = None
+    score_mean: Optional[float] = None
+    score_std: Optional[float] = None
+    steps_total_mean: Optional[float] = None
+    steps_to_success_mean: Optional[float] = None
+    tip_speed_max_mean_mm_s: Optional[float] = None
+    wall_force_max_mean: Optional[float] = None
+    wall_force_max_mean_newton: Optional[float] = None
+    force_available_rate: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -727,9 +817,13 @@ class EvaluationArtifacts:
     """Top-level files written by an evaluation run."""
 
     output_dir: Path
-    summary_csv_path: Optional[Path] = None
-    report_json_path: Optional[Path] = None
+    candidate_summaries_csv_path: Optional[Path] = None
+    candidate_summaries_json_path: Optional[Path] = None
+    manifest_json_path: Optional[Path] = None
+    trials_h5_path: Optional[Path] = None
     report_markdown_path: Optional[Path] = None
+    traces_dir: Optional[Path] = None
+    meshes_dir: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -740,18 +834,20 @@ class EvaluationReport:
     generated_at: str
     summaries: Tuple[CandidateSummary, ...]
     trials: Tuple[TrialResult, ...]
+    execution_plan: Optional[ExecutionPlan] = None
+    scoring_spec: Optional[ScoringSpec] = None
     artifacts: Optional[EvaluationArtifacts] = None
 
 
 @dataclass(frozen=True)
 class HistoricalReportSummary:
-    """Lightweight metadata for one persisted report on disk."""
+    """Lightweight metadata for one persisted manifest on disk."""
 
     job_name: str
     generated_at: str
     anatomy: str
     tested_wires: Tuple[str, ...]
-    report_json_path: Path
+    manifest_json_path: Path
     output_dir: Path
 
 
@@ -762,6 +858,8 @@ __all__ = [
     "BranchEndTarget",
     "BranchIndexTarget",
     "CandidateSummary",
+    "CandidateScoreSpec",
+    "EfficiencyScoreSpec",
     "EvaluationArtifacts",
     "EvaluationCandidate",
     "EvaluationJob",
@@ -778,11 +876,13 @@ __all__ = [
     "ManualTarget",
     "PolicySpec",
     "ScoreBreakdown",
-    "ScoreScales",
-    "ScoreWeights",
+    "ForceScoringSpec",
+    "SafetyScoreSpec",
     "ScoringSpec",
+    "SmoothnessScoreSpec",
     "TargetSpec",
     "TargetModeDescriptor",
+    "TrialIndicatorSpec",
     "TrialArtifactPaths",
     "TrialResult",
     "TrialTelemetrySummary",

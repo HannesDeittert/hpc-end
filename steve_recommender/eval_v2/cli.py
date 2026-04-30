@@ -11,14 +11,21 @@ from .models import (
     AorticArchAnatomy,
     BranchEndTarget,
     BranchIndexTarget,
+    CandidateScoreSpec,
+    EfficiencyScoreSpec,
     EvaluationCandidate,
     EvaluationJob,
     EvaluationScenario,
     ExecutionPlan,
+    ForceScoringSpec,
     FluoroscopySpec,
     ForceTelemetrySpec,
     ManualTarget,
     PolicySpec,
+    SafetyScoreSpec,
+    ScoringSpec,
+    SmoothnessScoreSpec,
+    TrialIndicatorSpec,
     VisualizationSpec,
     WireRef,
 )
@@ -220,7 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional comma-separated explicit policy seed list; length must match --trial-count",
     )
-    run_parser.add_argument("--max-episode-steps", type=int, default=1000)
+    run_parser.add_argument("--max-episode-steps", type=int, default=450)
     run_parser.add_argument(
         "--workers",
         type=int,
@@ -242,7 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser.add_argument("--friction", type=float, default=0.001)
     run_parser.add_argument(
-        "--tip-threshold-mm",
+        "--tip-length-mm",
         type=float,
         default=DEFAULT_TIP_THRESHOLD_MM,
         help=(
@@ -250,6 +257,16 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_TIP_THRESHOLD_MM})"
         ),
     )
+    run_parser.add_argument("--force-max-N", type=float, default=2.0)
+    run_parser.add_argument("--force-score-c", type=float, default=0.30)
+    run_parser.add_argument("--force-score-p", type=float, default=2.0)
+    run_parser.add_argument("--force-score-k", type=float, default=10.0)
+    run_parser.add_argument("--force-score-F50-N", type=float, default=1.55)
+    run_parser.add_argument("--score-lambda", dest="score_lambda", type=float, default=1.0)
+    run_parser.add_argument("--score-beta", type=float, default=0.0)
+    run_parser.add_argument("--score-weight-safety", type=float, default=0.5)
+    run_parser.add_argument("--score-weight-efficiency", type=float, default=0.5)
+    run_parser.add_argument("--jerk-scale-mm-s3", type=float, default=None)
     run_parser.add_argument(
         "--no-write-trace",
         action="store_false",
@@ -610,7 +627,7 @@ def _handle_run(
         stop_device_at_tree_end=bool(args.stop_device_at_tree_end),
         normalize_action=bool(args.normalize_action),
         force_telemetry=ForceTelemetrySpec(
-            tip_threshold_mm=float(args.tip_threshold_mm),
+            tip_threshold_mm=float(args.tip_length_mm),
             write_full_trace=bool(args.write_full_trace),
             write_diagnostics=bool(args.write_diagnostics),
         ),
@@ -634,6 +651,37 @@ def _handle_run(
                 rendered_trials_per_candidate=int(args.visualize_trials_per_candidate),
             ),
             worker_count=int(args.workers),
+        ),
+        scoring=ScoringSpec(
+            trial_indicator=TrialIndicatorSpec(),
+            force=ForceScoringSpec(
+                force_max_N=float(args.force_max_N),
+                tip_length_mm=float(args.tip_length_mm),
+            ),
+            safety_score=SafetyScoreSpec(
+                c=float(args.force_score_c),
+                p=float(args.force_score_p),
+                k=float(args.force_score_k),
+                F50_N=float(args.force_score_F50_N),
+                F_max_N=float(args.force_max_N),
+            ),
+            efficiency_score=EfficiencyScoreSpec(),
+            candidate_score=CandidateScoreSpec(
+                lambda_=float(args.score_lambda),
+                beta=float(args.score_beta),
+                default_weights={
+                    "score_safety": float(args.score_weight_safety),
+                    "score_efficiency": float(args.score_weight_efficiency),
+                },
+                active_components=("score_safety", "score_efficiency"),
+            ),
+            smoothness_score=SmoothnessScoreSpec(
+                jerk_scale_mm_s3=(
+                    None
+                    if args.jerk_scale_mm_s3 is None
+                    else float(args.jerk_scale_mm_s3)
+                )
+            ),
         ),
         output_root=Path(args.output_root),
     )

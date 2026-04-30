@@ -19,7 +19,6 @@ from steve_recommender.eval_v2.models import (
     EvaluationJob,
     EvaluationReport,
     EvaluationScenario,
-    ExecutionPlan,
     FluoroscopySpec,
     PolicySpec,
     TargetModeDescriptor,

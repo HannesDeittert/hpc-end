@@ -64,6 +64,10 @@ class _ServiceStub:
                     trained_on_wire=self.execution_wire,
                     trial_count=2,
                     success_rate=0.5,
+                    valid_rate=0.5,
+                    soft_score_mean_valid=0.75,
+                    soft_score_std_valid=0.1,
+                    candidate_score_final=0.75,
                     score_mean=0.75,
                     score_std=0.1,
                     steps_total_mean=5.0,
@@ -590,7 +594,7 @@ class CliAdapterTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(service.jobs[0].execution.worker_count, 4)
 
-    def test_cli_passes_tip_threshold_to_collector(self) -> None:
+    def test_cli_passes_tip_length_to_force_and_scoring_config(self) -> None:
         service = _ServiceStub()
         stdout = io.StringIO()
 
@@ -607,7 +611,7 @@ class CliAdapterTests(unittest.TestCase):
                 "branch_end",
                 "--target-branches",
                 "lcca",
-                "--tip-threshold-mm",
+                "--tip-length-mm",
                 "7.5",
             ],
             service=service,
@@ -618,8 +622,9 @@ class CliAdapterTests(unittest.TestCase):
         self.assertAlmostEqual(
             service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm, 7.5
         )
+        self.assertAlmostEqual(service.jobs[0].scoring.force.tip_length_mm, 7.5)
 
-    def test_cli_uses_default_tip_threshold(self) -> None:
+    def test_cli_uses_default_tip_length(self) -> None:
         service = _ServiceStub()
         stdout = io.StringIO()
 
@@ -644,6 +649,10 @@ class CliAdapterTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertAlmostEqual(
             service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm,
+            DEFAULT_TIP_THRESHOLD_MM,
+        )
+        self.assertAlmostEqual(
+            service.jobs[0].scoring.force.tip_length_mm,
             DEFAULT_TIP_THRESHOLD_MM,
         )
 

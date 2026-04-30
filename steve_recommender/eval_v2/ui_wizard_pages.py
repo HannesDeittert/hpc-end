@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import math
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -35,9 +37,16 @@ from .models import (
     AorticArchAnatomy,
     EvaluationJob,
     EvaluationReport,
+    ScoringSpec,
+    TrialResult,
     WireRef,
 )
-from .scoring import calculate_overall_score
+from .scoring import (
+    force_within_safety_threshold,
+    score_trial,
+    soft_score_total,
+    valid_for_ranking,
+)
 from .ui_controller import ClinicalUIController
 from .ui_trace_viewer import TraceViewerPanel
 
@@ -1556,16 +1565,14 @@ class ResultsPage(WizardPage):
         self._report: Optional[EvaluationReport] = None
         self._report_id: Optional[str] = None
         self._leaderboard_rows: list[dict[str, float | str]] = []
-        self._schema_defaults = self.controller.get_evaluation_schema()
-        self._master_sliders: Dict[str, QSlider] = {}
-        self._master_value_labels: Dict[str, QLabel] = {}
-        self._sub_sliders: Dict[Tuple[str, str], QSlider] = {}
-        self._sub_value_labels: Dict[Tuple[str, str], QLabel] = {}
-        self._sub_metric_axes: Dict[Tuple[str, str], str] = {}
+        self._schema_defaults = self.controller.get_results_control_schema()
+        self._control_sliders: Dict[str, QSlider] = {}
+        self._control_value_labels: Dict[str, QLabel] = {}
+        self._control_meta: Dict[str, Dict[str, Any]] = {}
         self._is_resetting_weights = False
         self._feedback_wire_options: list[str] = []
         self._feedback_attempt_rows: list[WireAttemptRowWidget] = []
-        self._current_wire_trials: list[object] = []
+        self._current_wire_trials: list[TrialResult] = []
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -1616,7 +1623,7 @@ class ResultsPage(WizardPage):
             "Highest Safety Score"
         )
         speed_card, self.fastest_insertion_value = self._create_kpi_card(
-            "Fastest Insertion"
+            "Highest Efficiency"
         )
         kpi_row_layout.addWidget(top_card)
         kpi_row_layout.addWidget(safety_card)
@@ -1628,7 +1635,7 @@ class ResultsPage(WizardPage):
         chart_layout = QVBoxLayout(chart_card)
         chart_layout.setContentsMargins(12, 12, 12, 12)
         chart_layout.setSpacing(8)
-        chart_title = QLabel("Top Wires: Overall Score")
+        chart_title = QLabel("Top Wires: Final Score")
         chart_title.setProperty("textRole", "h2")
         chart_layout.addWidget(chart_title)
         self._chart_rows_container = QWidget()
@@ -1643,19 +1650,27 @@ class ResultsPage(WizardPage):
             (
                 "Rank",
                 "Wire Name",
-                "Overall Score",
-                "Success Score",
-                "Speed Score",
-                "Safety Score",
+                "Final Score",
+                "Valid Rate",
+                "Mean Soft Score",
+                "Soft Score Std",
             )
         )
         self.leaderboard_table.horizontalHeader().setStretchLastSection(True)
         self.leaderboard_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.leaderboard_table.setSelectionMode(QTableWidget.SingleSelection)
 
-        self.deep_dive_table = QTableWidget(0, 5)
+        self.deep_dive_table = QTableWidget(0, 7)
         self.deep_dive_table.setHorizontalHeaderLabels(
-            ("Trial", "Success", "Time (steps)", "Max Force (N)", "Replay")
+            (
+                "Trial",
+                "Success",
+                "Valid",
+                "Time (steps)",
+                "Max Force (N)",
+                "Trial Score",
+                "Replay",
+            )
         )
         self.deep_dive_table.horizontalHeader().setStretchLastSection(True)
 
@@ -1772,6 +1787,10 @@ class ResultsPage(WizardPage):
         self._report_id = None
         if report.artifacts is not None:
             self._report_id = str(report.artifacts.output_dir)
+        self.controller.configure_results_scoring(report.scoring_spec or ScoringSpec())
+        self._schema_defaults = self.controller.get_results_control_schema()
+        self._build_dynamic_weight_controls(self._schema_defaults)
+        self._reset_to_default_weights()
         self._populate_feedback_wire_options()
         self._reset_feedback_attempt_rows()
         self.feedback_status_label.setText("")
@@ -1780,11 +1799,9 @@ class ResultsPage(WizardPage):
     def _build_dynamic_weight_controls(
         self, schema: Dict[str, Dict[str, object]]
     ) -> None:
-        self._master_sliders.clear()
-        self._master_value_labels.clear()
-        self._sub_sliders.clear()
-        self._sub_value_labels.clear()
-        self._sub_metric_axes.clear()
+        self._control_sliders.clear()
+        self._control_value_labels.clear()
+        self._control_meta.clear()
 
         while self._weights_layout.count():
             item = self._weights_layout.takeAt(0)
@@ -1799,65 +1816,54 @@ class ResultsPage(WizardPage):
             category_layout.setContentsMargins(10, 10, 10, 10)
             category_layout.setSpacing(8)
 
-            master_row = QWidget()
-            master_row_layout = QHBoxLayout(master_row)
-            master_row_layout.setContentsMargins(0, 0, 0, 0)
-            master_row_layout.setSpacing(8)
-            master_label = QLabel("Category Weight")
-            master_slider = QSlider(Qt.Horizontal)
-            master_slider.setRange(0, 100)
-            master_default = int(
-                round(float(category_config.get("weight", 1.0)) * 100.0)
-            )
-            master_slider.setValue(max(0, min(100, master_default)))
-            master_value = QLabel()
-            master_value.setMinimumWidth(44)
-            master_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            master_row_layout.addWidget(master_label)
-            master_row_layout.addWidget(master_slider, stretch=1)
-            master_row_layout.addWidget(master_value, stretch=0)
+            controls = category_config.get("controls", {})
+            if isinstance(controls, dict):
+                for control_label, control_meta in controls.items():
+                    if not isinstance(control_meta, dict):
+                        continue
+                    key = str(control_meta.get("key", control_label))
+                    minimum = float(control_meta.get("min", 0.0))
+                    maximum = float(control_meta.get("max", 1.0))
+                    resolution = max(int(control_meta.get("resolution", 100)), 1)
+                    default_value = float(control_meta.get("default", minimum))
 
-            self._master_sliders[category_name] = master_slider
-            self._master_value_labels[category_name] = master_value
-            master_slider.valueChanged.connect(self._on_weight_changed)
-
-            category_layout.addWidget(master_row)
-
-            sub_metrics = category_config.get("sub_metrics", {})
-            if isinstance(sub_metrics, dict):
-                for metric_name, metric_config in sub_metrics.items():
-                    metric_weight = 1.0
-                    axis = self._infer_axis_from_metric(metric_name)
-                    if isinstance(metric_config, dict):
-                        metric_weight = float(metric_config.get("weight", 1.0))
-                        axis = str(metric_config.get("axis", axis))
-                    else:
-                        metric_weight = float(metric_config)
-
-                    key = (str(category_name), str(metric_name))
-                    self._sub_metric_axes[key] = axis
-
-                    sub_row = QWidget()
-                    sub_row_layout = QHBoxLayout(sub_row)
-                    sub_row_layout.setContentsMargins(0, 0, 0, 0)
-                    sub_row_layout.setSpacing(8)
-                    sub_label = QLabel(f"  \u21b3 {metric_name}")
-                    sub_slider = QSlider(Qt.Horizontal)
-                    sub_slider.setRange(0, 100)
-                    sub_slider.setValue(
-                        max(0, min(100, int(round(metric_weight * 100.0))))
+                    row = QWidget()
+                    row_layout = QHBoxLayout(row)
+                    row_layout.setContentsMargins(0, 0, 0, 0)
+                    row_layout.setSpacing(8)
+                    row_label = QLabel(str(control_label))
+                    slider = QSlider(Qt.Horizontal)
+                    slider.setRange(0, resolution)
+                    slider_value = max(
+                        0,
+                        min(
+                            resolution,
+                            int(
+                                round(
+                                    ((default_value - minimum) / max(maximum - minimum, 1e-9))
+                                    * resolution
+                                )
+                            ),
+                        ),
                     )
-                    sub_value = QLabel()
-                    sub_value.setMinimumWidth(44)
-                    sub_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    sub_row_layout.addWidget(sub_label)
-                    sub_row_layout.addWidget(sub_slider, stretch=1)
-                    sub_row_layout.addWidget(sub_value, stretch=0)
+                    slider.setValue(slider_value)
+                    value_label = QLabel()
+                    value_label.setMinimumWidth(52)
+                    value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    row_layout.addWidget(row_label)
+                    row_layout.addWidget(slider, stretch=1)
+                    row_layout.addWidget(value_label, stretch=0)
 
-                    self._sub_sliders[key] = sub_slider
-                    self._sub_value_labels[key] = sub_value
-                    sub_slider.valueChanged.connect(self._on_weight_changed)
-                    category_layout.addWidget(sub_row)
+                    self._control_sliders[key] = slider
+                    self._control_value_labels[key] = value_label
+                    self._control_meta[key] = {
+                        "min": minimum,
+                        "max": maximum,
+                        "resolution": resolution,
+                        "format": str(control_meta.get("format", "{value:.2f}")),
+                    }
+                    slider.valueChanged.connect(self._on_weight_changed)
+                    category_layout.addWidget(row)
 
             self._weights_layout.addWidget(category_card)
 
@@ -1865,68 +1871,58 @@ class ResultsPage(WizardPage):
         self._refresh_weight_labels()
 
     def _refresh_weight_labels(self) -> None:
-        for category_name, slider in self._master_sliders.items():
-            label = self._master_value_labels.get(category_name)
+        for key, slider in self._control_sliders.items():
+            label = self._control_value_labels.get(key)
+            meta = self._control_meta.get(key, {})
             if label is not None:
-                label.setText(f"{slider.value()}%")
-        for key, slider in self._sub_sliders.items():
-            label = self._sub_value_labels.get(key)
-            if label is not None:
-                label.setText(f"{slider.value()}%")
+                value = self._slider_value_to_float(key, slider.value())
+                label.setText(str(meta.get("format", "{value:.2f}")).format(value=value))
 
-    def _axis_weights_from_dynamic_sliders(self) -> Dict[str, float]:
-        axis_weights = {"success": 0.0, "speed": 0.0, "safety": 0.0}
-        for category_name, master_slider in self._master_sliders.items():
-            master_weight = master_slider.value() / 100.0
-            for (sub_category, metric_name), sub_slider in self._sub_sliders.items():
-                if sub_category != category_name:
-                    continue
-                axis = self._sub_metric_axes.get((sub_category, metric_name), "success")
-                if axis not in axis_weights:
-                    continue
-                axis_weights[axis] += master_weight * (sub_slider.value() / 100.0)
+    def _slider_value_to_float(self, key: str, slider_value: int) -> float:
+        meta = self._control_meta.get(key, {})
+        minimum = float(meta.get("min", 0.0))
+        maximum = float(meta.get("max", 1.0))
+        resolution = max(int(meta.get("resolution", 100)), 1)
+        ratio = float(slider_value) / float(resolution)
+        return minimum + ratio * (maximum - minimum)
 
-        if sum(axis_weights.values()) <= 0.0:
-            return self.controller.get_default_results_axis_weights()
-        return axis_weights
-
-    @staticmethod
-    def _infer_axis_from_metric(metric_name: str) -> str:
-        name = str(metric_name).lower()
-        if "force" in name or "friction" in name or "safety" in name:
-            return "safety"
-        if "speed" in name or "time" in name or "insertion" in name:
-            return "speed"
-        return "success"
+    def _current_control_values(self) -> Dict[str, float]:
+        values: Dict[str, float] = {}
+        for key, slider in self._control_sliders.items():
+            values[key] = self._slider_value_to_float(key, slider.value())
+        return values
 
     def _on_weight_changed(self) -> None:
         self._refresh_weight_labels()
         if self._is_resetting_weights:
             return
-        axis_weights = self._axis_weights_from_dynamic_sliders()
-        self.controller.set_results_axis_weight("success", axis_weights["success"])
-        self.controller.set_results_axis_weight("speed", axis_weights["speed"])
-        self.controller.set_results_axis_weight("safety", axis_weights["safety"])
+        for key, value in self._current_control_values().items():
+            self.controller.set_results_control_value(key, value)
         self._recalculate_leaderboard()
 
     def _reset_to_default_weights(self) -> None:
         self._is_resetting_weights = True
-        defaults = self.controller.get_evaluation_schema()
+        defaults = self.controller.get_default_results_controls()
 
-        for category_name, master_slider in self._master_sliders.items():
-            category_defaults = defaults.get(category_name, {})
-            weight = float(category_defaults.get("weight", 1.0))
-            master_slider.setValue(max(0, min(100, int(round(weight * 100.0)))))
-
-        for (category_name, metric_name), sub_slider in self._sub_sliders.items():
-            category_defaults = defaults.get(category_name, {})
-            sub_defaults = category_defaults.get("sub_metrics", {})
-            metric_default = sub_defaults.get(metric_name, 1.0)
-            if isinstance(metric_default, dict):
-                metric_weight = float(metric_default.get("weight", 1.0))
-            else:
-                metric_weight = float(metric_default)
-            sub_slider.setValue(max(0, min(100, int(round(metric_weight * 100.0)))))
+        for key, slider in self._control_sliders.items():
+            meta = self._control_meta.get(key, {})
+            minimum = float(meta.get("min", 0.0))
+            maximum = float(meta.get("max", 1.0))
+            resolution = max(int(meta.get("resolution", 100)), 1)
+            default_value = float(defaults.get(key, minimum))
+            slider_value = max(
+                0,
+                min(
+                    resolution,
+                    int(
+                        round(
+                            ((default_value - minimum) / max(maximum - minimum, 1e-9))
+                            * resolution
+                        )
+                    ),
+                ),
+            )
+            slider.setValue(slider_value)
 
         self._is_resetting_weights = False
         self._on_weight_changed()
@@ -1996,6 +1992,140 @@ class ResultsPage(WizardPage):
         for index, row in enumerate(self._feedback_attempt_rows):
             row.set_attempt_index(index + 1)
 
+    def _active_scoring_spec(self) -> ScoringSpec:
+        base_scoring = self._report.scoring_spec if self._report is not None and self._report.scoring_spec is not None else ScoringSpec()
+        values = self.controller.get_results_control_values()
+        default_weights = {
+            "score_safety": float(values.get("score_weight_safety", 0.5)),
+            "score_efficiency": float(values.get("score_weight_efficiency", 0.5)),
+        }
+        return replace(
+            base_scoring,
+            force=replace(
+                base_scoring.force,
+                force_max_N=float(values.get("force_max_N", base_scoring.force.force_max_N)),
+            ),
+            safety_score=replace(
+                base_scoring.safety_score,
+                c=float(values.get("force_score_c", base_scoring.safety_score.c)),
+                p=float(values.get("force_score_p", base_scoring.safety_score.p)),
+                k=float(values.get("force_score_k", base_scoring.safety_score.k)),
+                F50_N=float(
+                    values.get("force_score_F50_N", base_scoring.safety_score.F50_N)
+                ),
+                F_max_N=float(values.get("force_max_N", base_scoring.force.force_max_N)),
+            ),
+            candidate_score=replace(
+                base_scoring.candidate_score,
+                lambda_=float(values.get("score_lambda", base_scoring.candidate_score.lambda_)),
+                beta=float(values.get("score_beta", base_scoring.candidate_score.beta)),
+                default_weights=default_weights,
+                active_components=tuple(
+                    name
+                    for name, weight in default_weights.items()
+                    if float(weight) > 0.0
+                )
+                or ("score_safety", "score_efficiency"),
+            ),
+        )
+
+    def _wire_rows_from_trials(self) -> list[dict[str, float | str]]:
+        if self._report is None:
+            return []
+        scoring = self._active_scoring_spec()
+        max_episode_steps = (
+            self._report.execution_plan.max_episode_steps
+            if self._report.execution_plan is not None
+            else 1000
+        )
+        grouped: dict[str, list[dict[str, float | str | TrialResult | bool | None]]] = {}
+        for trial in self._report.trials:
+            breakdown = score_trial(
+                telemetry=trial.telemetry,
+                max_episode_steps=max_episode_steps,
+                scoring=scoring,
+            )
+            is_valid = valid_for_ranking(
+                telemetry=trial.telemetry,
+                max_episode_steps=max_episode_steps,
+                scoring=scoring,
+            )
+            within_threshold = force_within_safety_threshold(
+                telemetry=trial.telemetry,
+                scoring=scoring,
+            )
+            soft_total = soft_score_total(breakdown=breakdown, scoring=scoring)
+            wire_name = trial.execution_wire.tool_ref
+            grouped.setdefault(wire_name, []).append(
+                {
+                    "trial": trial,
+                    "valid": is_valid,
+                    "within_threshold": within_threshold,
+                    "score_total": soft_total,
+                    "score_success": float(breakdown.success),
+                    "score_efficiency": float(breakdown.efficiency),
+                    "score_safety": float(breakdown.safety),
+                    "score_smoothness": (
+                        None
+                        if breakdown.smoothness is None
+                        else float(breakdown.smoothness)
+                    ),
+                }
+            )
+
+        rows: list[dict[str, float | str]] = []
+        for wire_name, entries in grouped.items():
+            n_trials = len(entries)
+            valid_scores = [
+                float(entry["score_total"]) for entry in entries if bool(entry["valid"])
+            ]
+            valid_rate = (
+                float(sum(1 for entry in entries if bool(entry["valid"]))) / float(n_trials)
+                if n_trials > 0
+                else 0.0
+            )
+            soft_mean = float(sum(valid_scores) / len(valid_scores)) if valid_scores else 0.0
+            if len(valid_scores) > 1:
+                variance = sum((score - soft_mean) ** 2 for score in valid_scores) / float(
+                    len(valid_scores) - 1
+                )
+                soft_std = math.sqrt(max(variance, 0.0))
+            else:
+                soft_std = 0.0
+            final_score = (
+                (valid_rate ** float(scoring.candidate_score.lambda_))
+                * max(0.0, soft_mean - float(scoring.candidate_score.beta) * soft_std)
+            ) if valid_scores else 0.0
+
+            safety_mean = float(
+                sum(float(entry["score_safety"]) for entry in entries) / float(n_trials)
+            ) if n_trials > 0 else 0.0
+            efficiency_mean = float(
+                sum(float(entry["score_efficiency"]) for entry in entries) / float(n_trials)
+            ) if n_trials > 0 else 0.0
+            times = [
+                float(
+                    trial.telemetry.steps_to_success
+                    if trial.telemetry.steps_to_success is not None
+                    else trial.telemetry.steps_total
+                )
+                for trial in (entry["trial"] for entry in entries)
+            ]
+            rows.append(
+                {
+                    "wire": wire_name,
+                    "overall": final_score,
+                    "valid_rate": valid_rate,
+                    "soft_mean": soft_mean,
+                    "soft_std": soft_std,
+                    "safety": safety_mean,
+                    "efficiency": efficiency_mean,
+                    "time_steps": (sum(times) / float(len(times))) if times else float("inf"),
+                }
+            )
+        rows.sort(key=lambda row: (float(row["overall"]), float(row["valid_rate"])), reverse=True)
+        return rows
+
     def _recalculate_leaderboard(self) -> None:
         if self._report is None or not self._report.summaries:
             self._leaderboard_rows = []
@@ -2005,54 +2135,7 @@ class ResultsPage(WizardPage):
             self._update_score_chart([])
             return
 
-        summaries = list(self._report.summaries)
-        max_steps = max(
-            float(s.steps_to_success_mean or s.steps_total_mean or 0.0)
-            for s in summaries
-        )
-        max_force = max(
-            float(s.wall_force_max_mean_newton or s.wall_force_max_mean or 0.0)
-            for s in summaries
-        )
-        axes_weights = self.controller.get_results_axis_weights()
-
-        grouped: dict[str, list[tuple[float, dict[str, float], object]]] = {}
-        for summary in summaries:
-            overall, axes = calculate_overall_score(
-                summary,
-                axes_weights=axes_weights,
-                max_expected_time=max_steps if max_steps > 0.0 else 1.0,
-                safe_force_threshold=max_force if max_force > 0.0 else 1.0,
-            )
-            grouped.setdefault(summary.execution_wire.tool_ref, []).append(
-                (overall, axes, summary)
-            )
-
-        rows: list[dict[str, float | str]] = []
-        for wire_name, entries in grouped.items():
-            count = float(len(entries))
-            times: list[float] = []
-            for _, _, summary in entries:
-                time_value = summary.steps_to_success_mean
-                if time_value is None:
-                    time_value = summary.steps_total_mean
-                if time_value is not None:
-                    times.append(float(time_value))
-
-            rows.append(
-                {
-                    "wire": wire_name,
-                    "overall": sum(entry[0] for entry in entries) / count,
-                    "success": sum(entry[1]["success"] for entry in entries) / count,
-                    "speed": sum(entry[1]["speed"] for entry in entries) / count,
-                    "safety": sum(entry[1]["safety"] for entry in entries) / count,
-                    "time_steps": (
-                        (sum(times) / float(len(times))) if times else float("inf")
-                    ),
-                }
-            )
-
-        rows.sort(key=lambda row: float(row["overall"]), reverse=True)
+        rows = self._wire_rows_from_trials()
         self._leaderboard_rows = rows
         self._update_kpi_cards(rows)
         self._update_score_chart(rows)
@@ -2074,13 +2157,13 @@ class ResultsPage(WizardPage):
                 row_index, 2, QTableWidgetItem(f"{float(row['overall']):.4f}")
             )
             self.leaderboard_table.setItem(
-                row_index, 3, QTableWidgetItem(f"{float(row['success']):.4f}")
+                row_index, 3, QTableWidgetItem(f"{float(row['valid_rate']):.4f}")
             )
             self.leaderboard_table.setItem(
-                row_index, 4, QTableWidgetItem(f"{float(row['speed']):.4f}")
+                row_index, 4, QTableWidgetItem(f"{float(row['soft_mean']):.4f}")
             )
             self.leaderboard_table.setItem(
-                row_index, 5, QTableWidgetItem(f"{float(row['safety']):.4f}")
+                row_index, 5, QTableWidgetItem(f"{float(row['soft_std']):.4f}")
             )
 
         target_row = 0
@@ -2103,7 +2186,7 @@ class ResultsPage(WizardPage):
 
         top = rows[0]
         safest = max(rows, key=lambda row: float(row["safety"]))
-        fastest = min(rows, key=lambda row: float(row["time_steps"]))
+        fastest = max(rows, key=lambda row: float(row["efficiency"]))
 
         self.top_recommendation_value.setText(
             f"{top['wire']}\n{float(top['overall']):.3f}"
@@ -2111,12 +2194,9 @@ class ResultsPage(WizardPage):
         self.highest_safety_value.setText(
             f"{safest['wire']}\n{float(safest['safety']):.3f}"
         )
-        if float(fastest["time_steps"]) == float("inf"):
-            self.fastest_insertion_value.setText(f"{fastest['wire']}\nn/a")
-        else:
-            self.fastest_insertion_value.setText(
-                f"{fastest['wire']}\n{int(round(float(fastest['time_steps'])))} steps"
-            )
+        self.fastest_insertion_value.setText(
+            f"{fastest['wire']}\n{float(fastest['efficiency']):.3f}"
+        )
 
     def _update_score_chart(self, rows: Sequence[dict[str, float | str]]) -> None:
         while self._chart_rows_layout.count():
@@ -2191,11 +2271,27 @@ class ResultsPage(WizardPage):
             for trial in self._report.trials
             if trial.execution_wire.tool_ref == wire_name
         ]
+        scoring = self._active_scoring_spec()
+        max_episode_steps = (
+            self._report.execution_plan.max_episode_steps
+            if self._report.execution_plan is not None
+            else 1000
+        )
         self._current_wire_trials = list(trials)
         self._show_trial_list_panel()
 
         self.deep_dive_table.setRowCount(len(trials))
         for idx, trial in enumerate(trials):
+            breakdown = score_trial(
+                telemetry=trial.telemetry,
+                max_episode_steps=max_episode_steps,
+                scoring=scoring,
+            )
+            is_valid = valid_for_ranking(
+                telemetry=trial.telemetry,
+                max_episode_steps=max_episode_steps,
+                scoring=scoring,
+            )
             force_value = None
             if trial.telemetry.forces is not None:
                 force_value = trial.telemetry.forces.total_force_norm_max_newton
@@ -2211,12 +2307,24 @@ class ResultsPage(WizardPage):
             self.deep_dive_table.setItem(
                 idx, 1, QTableWidgetItem(str(bool(trial.telemetry.success)))
             )
-            self.deep_dive_table.setItem(idx, 2, QTableWidgetItem(str(time_value)))
+            self.deep_dive_table.setItem(idx, 2, QTableWidgetItem(str(bool(is_valid))))
             self.deep_dive_table.setItem(
                 idx,
                 3,
+                QTableWidgetItem(str(time_value)),
+            )
+            self.deep_dive_table.setItem(
+                idx,
+                4,
                 QTableWidgetItem(
                     "n/a" if force_value is None else f"{float(force_value):.4f}"
+                ),
+            )
+            self.deep_dive_table.setItem(
+                idx,
+                5,
+                QTableWidgetItem(
+                    f"{float(soft_score_total(breakdown=breakdown, scoring=scoring)):.4f}"
                 ),
             )
             view_button = QPushButton("View")
@@ -2227,7 +2335,7 @@ class ResultsPage(WizardPage):
                     trial_index
                 )
             )
-            self.deep_dive_table.setCellWidget(idx, 4, view_button)
+            self.deep_dive_table.setCellWidget(idx, 6, view_button)
 
     def _open_trial_trace_by_index(self, trial_index: int) -> None:
         if trial_index < 0 or trial_index >= len(self._current_wire_trials):

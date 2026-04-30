@@ -18,6 +18,7 @@ from .models import (
     EvaluationReport,
     EvaluationScenario,
     HistoricalReportSummary,
+    ScoringSpec,
     TargetModeDescriptor,
     WireRef,
 )
@@ -283,28 +284,10 @@ class ClinicalUIController(QObject):
             "insertion_time": 0.5,
             "tip_force": 0.8,
         }
-        self._default_results_axis_weights: Dict[str, float] = {
-            "success": 0.6,
-            "speed": 0.25,
-            "safety": 0.15,
-        }
-        self._results_axis_weights: Dict[str, float] = dict(self._default_results_axis_weights)
-        self._evaluation_schema: Dict[str, Dict[str, Any]] = {
-            "Safety": {
-                "weight": 1.0,
-                "sub_metrics": {
-                    "Max Force": {"weight": 1.0, "axis": "safety"},
-                    "Friction": {"weight": 0.5, "axis": "safety"},
-                },
-            },
-            "Efficacy": {
-                "weight": 1.0,
-                "sub_metrics": {
-                    "Success Rate": {"weight": 1.0, "axis": "success"},
-                    "Speed": {"weight": 1.0, "axis": "speed"},
-                },
-            },
-        }
+        self._default_results_controls: Dict[str, float] = {}
+        self._results_controls: Dict[str, float] = {}
+        self._results_controls_schema: Dict[str, Dict[str, Any]] = {}
+        self.configure_results_scoring(ScoringSpec())
         self._wizard_state = WizardState()
 
     @property
@@ -343,8 +326,8 @@ class ClinicalUIController(QObject):
     def list_historical_reports(self) -> Tuple[HistoricalReportSummary, ...]:
         return self._service.list_historical_reports()
 
-    def load_report_from_disk(self, report_json_path: Path) -> EvaluationReport:
-        return self._service.load_report_from_disk(report_json_path)
+    def load_manifest_from_disk(self, manifest_json_path: Path) -> EvaluationReport:
+        return self._service.load_manifest_from_disk(manifest_json_path)
 
     def save_clinical_feedback(
         self,
@@ -380,21 +363,119 @@ class ClinicalUIController(QObject):
     def get_metric_weights(self) -> Dict[str, float]:
         return dict(self._metric_weights)
 
-    def get_default_results_axis_weights(self) -> Dict[str, float]:
-        return dict(self._default_results_axis_weights)
+    def configure_results_scoring(self, scoring_spec: Optional[ScoringSpec]) -> None:
+        scoring = scoring_spec or ScoringSpec()
+        default_weights = dict(scoring.candidate_score.default_weights)
+        self._default_results_controls = {
+            "score_weight_safety": float(default_weights.get("score_safety", 0.5)),
+            "score_weight_efficiency": float(default_weights.get("score_efficiency", 0.5)),
+            "score_lambda": float(scoring.candidate_score.lambda_),
+            "score_beta": float(scoring.candidate_score.beta),
+            "force_max_N": float(scoring.force.force_max_N),
+            "force_score_c": float(scoring.safety_score.c),
+            "force_score_p": float(scoring.safety_score.p),
+            "force_score_k": float(scoring.safety_score.k),
+            "force_score_F50_N": float(scoring.safety_score.F50_N),
+        }
+        self._results_controls = dict(self._default_results_controls)
+        self._results_controls_schema = {
+            "Candidate Score": {
+                "controls": {
+                    "Safety Weight": {
+                        "key": "score_weight_safety",
+                        "default": self._default_results_controls["score_weight_safety"],
+                        "min": 0.0,
+                        "max": 1.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Efficiency Weight": {
+                        "key": "score_weight_efficiency",
+                        "default": self._default_results_controls["score_weight_efficiency"],
+                        "min": 0.0,
+                        "max": 1.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Lambda": {
+                        "key": "score_lambda",
+                        "default": self._default_results_controls["score_lambda"],
+                        "min": 0.0,
+                        "max": 3.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Beta": {
+                        "key": "score_beta",
+                        "default": self._default_results_controls["score_beta"],
+                        "min": 0.0,
+                        "max": 2.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                },
+            },
+            "Safety Model": {
+                "controls": {
+                    "Force Max (N)": {
+                        "key": "force_max_N",
+                        "default": self._default_results_controls["force_max_N"],
+                        "min": 0.1,
+                        "max": 5.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score c": {
+                        "key": "force_score_c",
+                        "default": self._default_results_controls["force_score_c"],
+                        "min": 0.0,
+                        "max": 2.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score p": {
+                        "key": "force_score_p",
+                        "default": self._default_results_controls["force_score_p"],
+                        "min": 0.1,
+                        "max": 5.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score k": {
+                        "key": "force_score_k",
+                        "default": self._default_results_controls["force_score_k"],
+                        "min": 0.1,
+                        "max": 20.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score F50 (N)": {
+                        "key": "force_score_F50_N",
+                        "default": self._default_results_controls["force_score_F50_N"],
+                        "min": 0.1,
+                        "max": 5.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                },
+            },
+        }
 
-    def set_results_axis_weight(self, axis_name: str, value: float) -> None:
-        self._results_axis_weights[str(axis_name)] = max(float(value), 0.0)
+    def get_default_results_controls(self) -> Dict[str, float]:
+        return dict(self._default_results_controls)
 
-    def get_results_axis_weights(self) -> Dict[str, float]:
-        return dict(self._results_axis_weights)
+    def set_results_control_value(self, control_name: str, value: float) -> None:
+        self._results_controls[str(control_name)] = float(value)
 
-    def reset_results_axis_weights(self) -> Dict[str, float]:
-        self._results_axis_weights = dict(self._default_results_axis_weights)
-        return self.get_results_axis_weights()
+    def get_results_control_values(self) -> Dict[str, float]:
+        return dict(self._results_controls)
 
-    def get_evaluation_schema(self) -> Dict[str, Dict[str, Any]]:
-        return deepcopy(self._evaluation_schema)
+    def reset_results_control_values(self) -> Dict[str, float]:
+        self._results_controls = dict(self._default_results_controls)
+        return self.get_results_control_values()
+
+    def get_results_control_schema(self) -> Dict[str, Dict[str, Any]]:
+        return deepcopy(self._results_controls_schema)
 
     def reset_wizard_state(self) -> None:
         self._wizard_state = WizardState()

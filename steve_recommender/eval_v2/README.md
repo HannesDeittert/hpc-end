@@ -133,16 +133,18 @@ The normal execution flow is:
 4. `prepare_evaluation_runtime(...)` builds the runtime for a candidate/scenario pair
 5. `run_single_trial(...)` executes each trial
 6. `summarize_trials(...)` aggregates results into candidate summaries
-7. report artifacts are written:
-   - `report.json`
-   - `summary.csv`
+7. run artifacts are written:
+   - `manifest.json`
+   - `candidate_summaries.csv`
+   - `candidate_summaries.json`
+   - `trials.h5`
    - `report.md`
 
 Important separation of concerns:
 
 - `ExecutionPlan` decides *what seed schedule and execution mode should happen*
 - `runner.py` decides *how one single trial is actually executed*
-- `service.py` decides *how many runtimes/workers are used and how reports are written*
+- `service.py` decides *how many runtimes/workers are used and how manifests / trial tables are written*
 
 ## 4. Seed management
 
@@ -603,11 +605,27 @@ Rules:
 - `--friction`
   - scene friction
 
-- `--tip-threshold-mm`
-  - distal-tip force aggregation threshold in millimeters
+- `--tip-length-mm`
+  - distal tip region length in millimeters
   - defaults to `DEFAULT_TIP_THRESHOLD_MM = 3.0`
   - a wire collision DOF is counted as tip when its arc-length distance from the
     distal end is less than or equal to this threshold
+
+- `--force-max-N`
+- `--force-score-c`
+- `--force-score-p`
+- `--force-score-k`
+- `--force-score-F50-N`
+  - parameters of the default nonlinear safety score
+
+- `--score-lambda`
+- `--score-beta`
+- `--score-weight-safety`
+- `--score-weight-efficiency`
+  - parameters of candidate-level ranking aggregation
+
+- `--jerk-scale-mm-s3`
+  - optional jerk scale for stored smoothness scoring
 
 - `--no-write-trace`
   - disables the default per-trial HDF5 trace writer
@@ -675,11 +693,20 @@ Each run writes a folder under the selected output root.
 
 Typical contents:
 
-- `report.json`
-  - full structured result
+- `manifest.json`
+  - stable run-level entrypoint for archive loading and analysis
+  - stores execution config, seed schedule, scoring spec, artifact paths, and candidate summaries
 
-- `summary.csv`
-  - flat candidate summary table
+- `candidate_summaries.csv`
+  - flat candidate summary table for quick inspection
+
+- `candidate_summaries.json`
+  - structured candidate summary table for archive/UI use
+
+- `trials.h5`
+  - column-oriented per-trial table
+  - stores one row per trial with seeds, hard-validity flags, telemetry scalars,
+    score components, final soft score, and trace path
 
 - `report.md`
   - human-readable summary
@@ -694,7 +721,38 @@ Typical contents:
   - one pre-written anatomy mesh HDF5 file per unique anatomy in the job
   - trial traces reference these files via relative `mesh_ref` paths
 
-These outputs are what the archive screen reopens later.
+`manifest.json` is the archive entrypoint. The archive screen loads the manifest,
+then reads `trials.h5` for full per-trial detail.
+
+### 7.1 Default ranking logic
+
+The default hard-validity flag is `valid_for_ranking`. A trial is valid only if:
+
+- it succeeds
+- `steps_to_success` is available and within `max_episode_steps`
+- force telemetry is available for scoring
+- `force_total_norm_max_N <= force_max_N`
+
+The default soft per-trial score uses only:
+
+- `score_safety`
+- `score_efficiency`
+
+with weights `0.5 / 0.5`.
+
+`score_success` is still stored per trial but is not part of the default soft
+score, because success is already handled by `valid_for_ranking` and the valid
+rate penalty.
+
+The candidate-level score is:
+
+- `p_w = mean(valid_for_ranking)`
+- `S_bar_w = mean(soft score over valid trials)`
+- `sigma_S = sample std over valid trial soft scores`
+- `Score_w = p_w^lambda * max(0, S_bar_w - beta * sigma_S)`
+
+The exact scoring parameters used by one run are persisted in `manifest.json`
+under `scoring_spec`.
 
 Trace files can be replayed through the standalone viewer CLI or the inline GUI
 replay panel described in sections 6.13 and 8.10.
@@ -832,7 +890,7 @@ If you need exact manual seed lists, use the CLI.
 
 The GUI uses `DEFAULT_TIP_THRESHOLD_MM = 3.0` for distal-tip force aggregation.
 It does not expose this as a field yet; scripted runs can configure the same
-collector setting with `--tip-threshold-mm`.
+collector setting with `--tip-length-mm`.
 
 The GUI also uses `write_full_trace=True` by default through
 `ForceTelemetrySpec`. It does not currently expose the trace-writing toggles;

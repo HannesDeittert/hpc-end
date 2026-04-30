@@ -15,14 +15,20 @@ Per-job layout:
 ```text
 output_root/
 └── <job_name>_<timestamp>/
-    ├── report.json
-    ├── summary.csv
+    ├── manifest.json
+    ├── candidate_summaries.csv
+    ├── candidate_summaries.json
+    ├── trials.h5
     ├── report.md
     ├── meshes/
     │     anatomy_<id>.h5
     └── traces/
           trial_<candidate>_<env_seed>_<policy_seed>.h5
 ```
+
+`manifest.json` is the archive entrypoint. `trials.h5` stores one row per
+executed trial in column-oriented form. This document still describes the
+per-trial HDF5 trace files under `traces/`.
 
 Per-trial layout:
 

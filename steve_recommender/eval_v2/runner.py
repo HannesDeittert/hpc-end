@@ -65,7 +65,7 @@ from .models import (
     TrialTelemetrySummary,
 )
 from .runtime import PreparedEvaluationRuntime, safe_reset_intervention
-from .scoring import score_trial
+from .scoring import force_within_safety_threshold, score_trial, valid_for_ranking
 from .visualization import TrialVisualisation, build_trial_visualisation
 
 
@@ -503,6 +503,61 @@ def _read_collision_positions_mm(intervention: Any) -> np.ndarray:
     )
 
 
+def _distal_tip_position_mm(intervention: Any) -> np.ndarray:
+    positions = np.asarray(intervention.simulation.dof_positions, dtype=np.float32).reshape(
+        (-1, 3)
+    )
+    if positions.shape[0] == 0:
+        return np.zeros((3,), dtype=np.float32)
+    return np.asarray(positions[-1], dtype=np.float32)
+
+
+def _tip_motion_metrics(
+    tip_positions_mm: list[np.ndarray],
+    *,
+    dt_s: float,
+) -> dict[str, float | None]:
+    if not tip_positions_mm:
+        return {
+            "tip_total_distance_mm": None,
+            "tip_speed_max_mm_s": None,
+            "tip_speed_mean_mm_s": None,
+            "tip_acc_p95": None,
+            "tip_acc_max": None,
+            "tip_jerk_p95": None,
+            "tip_jerk_max": None,
+        }
+    positions = np.asarray(tip_positions_mm, dtype=np.float64).reshape((-1, 3))
+    if positions.shape[0] == 1:
+        return {
+            "tip_total_distance_mm": 0.0,
+            "tip_speed_max_mm_s": 0.0,
+            "tip_speed_mean_mm_s": 0.0,
+            "tip_acc_p95": None,
+            "tip_acc_max": None,
+            "tip_jerk_p95": None,
+            "tip_jerk_max": None,
+        }
+    dt = float(max(dt_s, 1e-9))
+    deltas = np.diff(positions, axis=0)
+    distances = np.linalg.norm(deltas, axis=1)
+    velocities = deltas / dt
+    speed_norms = np.linalg.norm(velocities, axis=1)
+    accelerations = np.diff(velocities, axis=0) / dt if velocities.shape[0] >= 2 else np.zeros((0, 3), dtype=np.float64)
+    acc_norms = np.linalg.norm(accelerations, axis=1)
+    jerks = np.diff(accelerations, axis=0) / dt if accelerations.shape[0] >= 2 else np.zeros((0, 3), dtype=np.float64)
+    jerk_norms = np.linalg.norm(jerks, axis=1)
+    return {
+        "tip_total_distance_mm": float(np.sum(distances)),
+        "tip_speed_max_mm_s": float(np.max(speed_norms)) if speed_norms.size else 0.0,
+        "tip_speed_mean_mm_s": float(np.mean(speed_norms)) if speed_norms.size else 0.0,
+        "tip_acc_p95": float(np.percentile(acc_norms, 95.0)) if acc_norms.size else None,
+        "tip_acc_max": float(np.max(acc_norms)) if acc_norms.size else None,
+        "tip_jerk_p95": float(np.percentile(jerk_norms, 95.0)) if jerk_norms.size else None,
+        "tip_jerk_max": float(np.max(jerk_norms)) if jerk_norms.size else None,
+    }
+
+
 def _triangle_contacts_from_records(
     records: List[dict[str, Any]],
 ) -> tuple[TriangleContactRecord, ...]:
@@ -659,6 +714,7 @@ def run_single_trial(
         force_collector = EvalV2ForceTelemetryCollector(
             spec=runtime.scenario.force_telemetry,
             action_dt_s=runtime.scenario.action_dt_s,
+            anatomy_mesh_path=runtime.scenario.anatomy.simulation_mesh_path,
         )
         force_status = force_collector.ensure_runtime(intervention=runtime.intervention)
         if runtime.scenario.force_telemetry.required and not force_status.configured:
@@ -703,6 +759,7 @@ def run_single_trial(
             )
 
         translation_speeds_mm_s: list[float] = []
+        tip_positions_mm: list[np.ndarray] = [_distal_tip_position_mm(runtime.intervention)]
         episode_reward = 0.0
         last_info = dict(info)
         steps_to_success: int | None = None
@@ -738,6 +795,7 @@ def run_single_trial(
                 )
             )
             observation, reward, terminated, truncated, info = env.step(env_action)
+            tip_positions_mm.append(_distal_tip_position_mm(runtime.intervention))
             force_collector.capture_step(
                 intervention=runtime.intervention,
                 step_index=step_index + 1,
@@ -820,11 +878,9 @@ def run_single_trial(
 
         wall_time_s = time.perf_counter() - wall_time_start
         steps_total = int(last_info.get("steps", len(translation_speeds_mm_s)))
-        tip_speed_max_mm_s = (
-            max(translation_speeds_mm_s) if translation_speeds_mm_s else 0.0
-        )
-        tip_speed_mean_mm_s = (
-            float(np.mean(translation_speeds_mm_s)) if translation_speeds_mm_s else 0.0
+        tip_motion = _tip_motion_metrics(
+            tip_positions_mm,
+            dt_s=runtime.scenario.action_dt_s,
         )
         telemetry = TrialTelemetrySummary(
             success=bool(last_info.get("success", steps_to_success is not None)),
@@ -838,13 +894,27 @@ def run_single_trial(
             average_translation_speed_last=_optional_finite(
                 last_info.get("average_translation_speed")
             ),
-            tip_speed_max_mm_s=float(tip_speed_max_mm_s),
-            tip_speed_mean_mm_s=float(tip_speed_mean_mm_s),
+            tip_speed_max_mm_s=tip_motion["tip_speed_max_mm_s"],
+            tip_speed_mean_mm_s=tip_motion["tip_speed_mean_mm_s"],
+            tip_total_distance_mm=tip_motion["tip_total_distance_mm"],
+            tip_acc_p95=tip_motion["tip_acc_p95"],
+            tip_acc_max=tip_motion["tip_acc_max"],
+            tip_jerk_p95=tip_motion["tip_jerk_p95"],
+            tip_jerk_max=tip_motion["tip_jerk_max"],
             forces=force_collector.build_summary(),
         )
         score = score_trial(
             telemetry=telemetry,
             max_episode_steps=execution.max_episode_steps,
+            scoring=scoring,
+        )
+        trial_valid_for_ranking = valid_for_ranking(
+            telemetry=telemetry,
+            max_episode_steps=execution.max_episode_steps,
+            scoring=scoring,
+        )
+        trial_force_within_threshold = force_within_safety_threshold(
+            telemetry=telemetry,
             scoring=scoring,
         )
         if recorder is not None:
@@ -864,6 +934,8 @@ def run_single_trial(
             policy_seed=policy_seed,
             score=score,
             telemetry=telemetry,
+            valid_for_ranking=trial_valid_for_ranking,
+            force_within_safety_threshold=trial_force_within_threshold,
             artifacts=TrialArtifactPaths(
                 trace_h5_path=(
                     trace_path

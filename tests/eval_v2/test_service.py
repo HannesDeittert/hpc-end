@@ -7,6 +7,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pyvista as pv
 
@@ -483,9 +484,8 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertEqual(report.job_name, "job_a")
         self.assertEqual(report.generated_at, "2026-04-20T12:00:00+00:00")
         self.assertEqual(len(report.trials), 2)
-        self.assertEqual(
-            report.artifacts.output_dir, Path("/tmp/eval_outputs") / "job_a"
-        )
+        self.assertEqual(report.artifacts.output_dir.parent, Path("/tmp/eval_outputs"))
+        self.assertTrue(report.artifacts.output_dir.name.startswith("job_a_"))
         self.assertEqual(len(report.summaries), 1)
 
         summary = report.summaries[0]
@@ -497,7 +497,7 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         self.assertEqual(summary.trial_count, 2)
         self.assertAlmostEqual(summary.success_rate, 0.5)
         self.assertAlmostEqual(summary.score_mean, 0.5)
-        self.assertAlmostEqual(summary.score_std, 0.25)
+        self.assertAlmostEqual(summary.score_std, 0.35355339059)
         self.assertAlmostEqual(summary.steps_total_mean, 5.5)
         self.assertAlmostEqual(summary.steps_to_success_mean, 4.0)
         self.assertAlmostEqual(summary.tip_speed_max_mean_mm_s, 30.0)
@@ -1000,11 +1000,9 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                 trial_runner=trial_runner,
             )
 
-            runner.run_evaluation_job(job)
+            report = runner.run_evaluation_job(job)
 
-            trace_files = sorted(
-                (output_root / "job_trace_count" / "traces").glob("*.h5")
-            )
+            trace_files = sorted((report.artifacts.output_dir / "traces").glob("*.h5"))
             self.assertEqual(len(trace_files), 4)
 
     def test_service_pre_writes_meshes_before_workers(self) -> None:
@@ -1033,9 +1031,7 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
 
             def parallel_task_runner(tasks, *, worker_count, progress_callback=None):
                 _ = worker_count, progress_callback
-                mesh_path = (
-                    output_root / "job_mesh_prewrite" / "meshes" / "anatomy_Tree_00.h5"
-                )
+                mesh_path = tasks[0].output_dir / "meshes" / "anatomy_Tree_00.h5"
                 observed_mesh_state.append(
                     (mesh_path.exists(), mesh_path.stat().st_mtime)
                 )
@@ -1207,6 +1203,10 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                     trained_on_wire=execution_wire,
                     trial_count=1,
                     success_rate=1.0,
+                    valid_rate=1.0,
+                    soft_score_mean_valid=0.9,
+                    soft_score_std_valid=0.0,
+                    candidate_score_final=0.9,
                     score_mean=0.9,
                     score_std=0.0,
                     steps_total_mean=3.0,
@@ -1253,22 +1253,29 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
             self.assertIsNotNone(artifacts)
             assert artifacts is not None
             self.assertTrue(artifacts.output_dir.exists())
-            self.assertTrue(artifacts.summary_csv_path.exists())
-            self.assertTrue(artifacts.report_json_path.exists())
+            self.assertTrue(artifacts.candidate_summaries_csv_path.exists())
+            self.assertTrue(artifacts.candidate_summaries_json_path.exists())
+            self.assertTrue(artifacts.manifest_json_path.exists())
+            self.assertTrue(artifacts.trials_h5_path.exists())
             self.assertTrue(artifacts.report_markdown_path.exists())
 
-            self.assertEqual(artifacts.output_dir, output_root / "job_outputs")
+            self.assertTrue(artifacts.output_dir.parent == output_root)
+            self.assertTrue(artifacts.output_dir.name.startswith("job_outputs_"))
 
-            with artifacts.summary_csv_path.open(
+            with artifacts.candidate_summaries_csv_path.open(
                 "r", encoding="utf-8", newline=""
             ) as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["candidate_name"], "candidate_a")
+            self.assertEqual(rows[0]["candidate_score_final"], "0.9")
 
-            payload = json.loads(artifacts.report_json_path.read_text(encoding="utf-8"))
+            payload = json.loads(artifacts.manifest_json_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["job_name"], "job_outputs")
             self.assertEqual(len(payload["summaries"]), 1)
+            self.assertEqual(payload["schema_version"], 1)
+            with h5py.File(artifacts.trials_h5_path, "r") as handle:
+                self.assertIn("trials", handle)
 
     def test_list_historical_reports_discovers_metadata_from_output_root(self) -> None:
         execution_wire = _wire("steve_default", "standard_j")
@@ -1286,6 +1293,10 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                     trained_on_wire=execution_wire,
                     trial_count=1,
                     success_rate=1.0,
+                    valid_rate=1.0,
+                    soft_score_mean_valid=0.8,
+                    soft_score_std_valid=0.0,
+                    candidate_score_final=0.8,
                     score_mean=0.8,
                     score_std=0.0,
                     steps_total_mean=3.0,
@@ -1335,9 +1346,9 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
         self.assertEqual(summary.generated_at, "2026-04-21T10:00:00+00:00")
         self.assertIn("scenario_archive", summary.anatomy)
         self.assertEqual(summary.tested_wires, ("steve_default/standard_j",))
-        self.assertTrue(summary.report_json_path.name == "report.json")
+        self.assertTrue(summary.manifest_json_path.name == "manifest.json")
 
-    def test_load_report_from_disk_reconstructs_full_evaluation_report(self) -> None:
+    def test_load_manifest_from_disk_reconstructs_full_evaluation_report(self) -> None:
         execution_wire = _wire("steve_default", "standard_j")
         policy = _policy("policy_a", execution_wire)
         candidate = _candidate("candidate_a", execution_wire, policy)
@@ -1353,6 +1364,10 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                     trained_on_wire=execution_wire,
                     trial_count=1,
                     success_rate=1.0,
+                    valid_rate=1.0,
+                    soft_score_mean_valid=0.8,
+                    soft_score_std_valid=0.0,
+                    candidate_score_final=0.8,
                     score_mean=0.8,
                     score_std=0.0,
                     steps_total_mean=3.0,
@@ -1395,8 +1410,12 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                             ),
                             tip_force_total_vector_N=(0.1, 0.2, 0.3),
                             tip_force_total_norm_N=0.3741657387,
+                            tip_force_peak_normal_N=0.2,
+                            tip_force_total_mean_N=0.1,
                         ),
                     ),
+                    valid_for_ranking=True,
+                    force_within_safety_threshold=True,
                 ),
             ),
         )
@@ -1430,22 +1449,18 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
 
             persisted = service.run_evaluation_job(job)
             assert persisted.artifacts is not None
-            loaded = service.load_report_from_disk(persisted.artifacts.report_json_path)
+            loaded = service.load_manifest_from_disk(
+                persisted.artifacts.manifest_json_path
+            )
 
         self.assertEqual(loaded.job_name, "load_job")
         self.assertEqual(loaded.generated_at, "2026-04-21T11:00:00+00:00")
         self.assertEqual(len(loaded.summaries), 1)
         self.assertEqual(loaded.summaries[0].candidate_name, "candidate_a")
         assert loaded.trials[0].telemetry.forces is not None
-        self.assertTrue(loaded.trials[0].telemetry.forces.tip_force_available)
-        self.assertEqual(
-            loaded.trials[0].telemetry.forces.tip_force_records[0][
-                "wire_collision_dof"
-            ],
-            2,
-        )
-        self.assertEqual(
-            loaded.trials[0].telemetry.forces.tip_force_total_vector_N, (0.1, 0.2, 0.3)
+        self.assertTrue(loaded.trials[0].telemetry.forces.available_for_score)
+        self.assertAlmostEqual(
+            loaded.trials[0].telemetry.forces.tip_force_peak_normal_N, 0.2
         )
 
     def test_save_clinical_feedback_writes_feedback_json_next_to_report(self) -> None:

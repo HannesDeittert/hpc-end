@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
+from third_party.stEVE.eve.intervention.vesseltree.util.meshing import load_mesh
+from .models import ForceTelemetrySpec, ForceTelemetrySummary
 
 DEFAULT_TIP_THRESHOLD_MM = 3.0
 """Default distal-tip arc-length threshold in millimeters.
@@ -17,8 +19,6 @@ Tip semantics: absolute arc length from the distal end of the wire, in mm. A
 collision DOF is classified as tip when its arc-length distance from the distal
 end is less than or equal to this threshold.
 """
-
-from .models import ForceTelemetrySpec, ForceTelemetrySummary
 
 logger = logging.getLogger(__name__)
 
@@ -277,10 +277,19 @@ class ForceRuntimeStatus:
 class EvalV2ForceTelemetryCollector:
     """Collect force telemetry directly from SOFA runtime objects for eval_v2."""
 
-    def __init__(self, *, spec: ForceTelemetrySpec, action_dt_s: float) -> None:
+    def __init__(
+        self,
+        *,
+        spec: ForceTelemetrySpec,
+        action_dt_s: float,
+        anatomy_mesh_path: Optional[Path] = None,
+    ) -> None:
         self._spec = spec
         self._action_dt_s = float(max(action_dt_s, 1e-9))
         self._tip_threshold_mm = float(spec.tip_threshold_mm)
+        self._anatomy_mesh_path = (
+            None if anatomy_mesh_path is None else Path(anatomy_mesh_path)
+        )
         self._tip_arc_length_fallback_logged = False
         self._status = ForceRuntimeStatus(False, "uninitialized", "")
         self._last_root_id: Optional[int] = None
@@ -328,6 +337,8 @@ class EvalV2ForceTelemetryCollector:
         # Per-timestep sparse records for later tracing/export
         self._triangle_force_records: list[dict] = []
         self._wire_force_records: list[dict] = []
+        self._tip_force_proxy_per_step_N: list[float] = []
+        self._triangle_normals_by_id: dict[int, np.ndarray] = {}
 
     @property
     def status(self) -> ForceRuntimeStatus:
@@ -383,6 +394,37 @@ class EvalV2ForceTelemetryCollector:
             logger.info("[force_telemetry] WireWallContactExport attached to root")
         except Exception as exc:
             logger.warning(f"[force_telemetry] WireWallContactExport attach failed: {exc}")
+
+    def _ensure_triangle_normals_loaded(self) -> None:
+        if self._triangle_normals_by_id or self._anatomy_mesh_path is None:
+            return
+        mesh_path = Path(self._anatomy_mesh_path)
+        if not mesh_path.exists():
+            logger.warning(
+                "[force_telemetry] anatomy mesh path missing for triangle normals: %s",
+                mesh_path,
+            )
+            return
+        try:
+            mesh = load_mesh(str(mesh_path)).extract_surface().triangulate()
+            faces = np.asarray(mesh.faces, dtype=np.int64).reshape((-1, 4))
+            if faces.shape[1] != 4:
+                return
+            triangle_indices = np.asarray(faces[:, 1:4], dtype=np.int64)
+            vertices = np.asarray(mesh.points, dtype=np.float64).reshape((-1, 3))
+            normals: dict[int, np.ndarray] = {}
+            for triangle_id, triangle in enumerate(triangle_indices):
+                p0 = vertices[int(triangle[0])]
+                p1 = vertices[int(triangle[1])]
+                p2 = vertices[int(triangle[2])]
+                normal = np.cross(p1 - p0, p2 - p0)
+                norm = float(np.linalg.norm(normal))
+                if norm <= 0.0:
+                    continue
+                normals[int(triangle_id)] = (normal / norm).astype(np.float64)
+            self._triangle_normals_by_id = normals
+        except Exception:
+            logger.exception("[force_telemetry] failed to load anatomy mesh normals")
 
     def _ensure_passive_monitor(self, sim: Any) -> ForceRuntimeStatus:
         lcp = getattr(getattr(sim, "root", None), "LCP", None)
@@ -499,6 +541,7 @@ class EvalV2ForceTelemetryCollector:
         """Project constraint rows to world-space per-dof forces and assemble
         per-triangle and per-wire sparse records when mapping is available.
         """
+        self._ensure_triangle_normals_loaded()
         lcp = getattr(root, "LCP", None)
         if lcp is None:
             return
@@ -689,6 +732,33 @@ class EvalV2ForceTelemetryCollector:
         for rec in wire_force_list:
             self._wire_force_records.append(rec)
 
+        tip_force_step_max_N = 0.0
+        if wire_force_list and self._triangle_normals_by_id:
+            tip_row_ids = {
+                int(record["row_idx"])
+                for record in wire_force_list
+                if bool(record.get("is_tip", False))
+            }
+            row_to_force_N: dict[int, np.ndarray] = {}
+            for rc in row_contribs:
+                row_idx = int(rc.get("row_idx", -1))
+                row_to_force_N[row_idx] = np.asarray(
+                    rc.get("force_vec", np.zeros((3,))), dtype=np.float64
+                ).reshape((3,)) * float(self._force_scale_to_newton)
+            for row_idx in tip_row_ids:
+                for triangle_id in row_to_tri.get(row_idx, set()) if 'row_to_tri' in locals() else ():
+                    normal = self._triangle_normals_by_id.get(int(triangle_id))
+                    force_vec_N = row_to_force_N.get(int(row_idx))
+                    if normal is None or force_vec_N is None:
+                        continue
+                    wire_to_wall_force_N = -force_vec_N
+                    compressive_normal_N = max(
+                        0.0, float(np.dot(wire_to_wall_force_N, normal))
+                    )
+                    if compressive_normal_N > tip_force_step_max_N:
+                        tip_force_step_max_N = compressive_normal_N
+        self._tip_force_proxy_per_step_N.append(float(tip_force_step_max_N))
+
         # Update mapping counters
         self._lcp_mapped_wall_row_count_max = max(self._lcp_mapped_wall_row_count_max, int(len(mapped_rows)))
         self._last_constraint_projection = {
@@ -846,7 +916,6 @@ class EvalV2ForceTelemetryCollector:
         # New priority: mapped LCP (scoreable) > unmapped LCP (diagnostic) > legacy monitor (diagnostic only)
         use_mapped_lcp = mapped_lcp_has_signal
         use_unmapped_lcp = (not use_mapped_lcp) and raw_lcp_has_signal
-        use_monitor = False  # monitor is legacy/diagnostic only and not used for scoring
         mapped_lcp_partial = bool(use_mapped_lcp and self._lcp_contact_export_partial_any)
 
         if use_mapped_lcp and not mapped_lcp_partial:
@@ -976,6 +1045,16 @@ class EvalV2ForceTelemetryCollector:
                 float(tip_force_total_vector[2]),
             ),
             tip_force_total_norm_N=float(np.linalg.norm(tip_force_total_vector)),
+            tip_force_peak_normal_N=(
+                float(np.max(self._tip_force_proxy_per_step_N))
+                if self._tip_force_proxy_per_step_N
+                else None
+            ),
+            tip_force_total_mean_N=(
+                float(np.mean(self._tip_force_proxy_per_step_N))
+                if self._tip_force_proxy_per_step_N
+                else None
+            ),
             lcp_mapped_wall_row_count_max=int(self._lcp_mapped_wall_row_count_max),
             lcp_contact_export_coverage=(
                 float(np.max(self._lcp_contact_export_coverage_samples))
