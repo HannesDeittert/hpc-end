@@ -74,8 +74,8 @@ python -m steve_recommender.train_v2 doctor [OPTIONS]
 | `--heatup-steps N` | `500000` | Random exploration steps before SAC updates start. |
 | `--training-steps N` | `20000000` | Total explore steps target (including heatup). |
 | `--eval-every N` | `250000` | Evaluate every N explore steps. |
-| `--eval-episodes N` | `1` | Episodes per evaluation. |
-| `--eval-seeds SEEDS` | `none` | Comma-separated integer seeds for deterministic eval (e.g. `42,43`). |
+| `--eval-episodes N` | `all eval seeds` | Episodes per evaluation; omit to run one episode per eval seed. |
+| `--eval-seeds SEEDS` | ArchVar seed list | Comma-separated integer seeds for deterministic eval (defaults to the ArchVar training seed schedule). |
 | `--explore-episodes-between-updates N` | `100` | Explore episodes collected between each SAC update batch. |
 | `--update-per-explore-step RATIO` | `0.05` | SAC gradient updates per explore step. |
 | `--consecutive-action-steps N` | `1` | Repeat each action N times before observing. |
@@ -107,11 +107,10 @@ python -m steve_recommender.train_v2 doctor [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--reward-profile PROFILE` | `default` | `default`, `default_plus_force_penalty`, or `default_plus_excess_force_penalty`. |
-| `--force-penalty-factor F` | `0.0` | Penalty weight for wall-force reward. Required and must be `> 0` when profile is `default_plus_force_penalty`. |
-| `--force-threshold N` | `0.85` | Newton threshold for `default_plus_excess_force_penalty`. Force below this value is ignored. |
-| `--force-divisor D` | `1000.0` | Divisor for the excess-force penalty magnitude. |
-| `--force-tip-only` | off | Penalize only catheter-tip contact force instead of total wall force. |
+| `--reward-profile PROFILE` | `default` | `default` or `default_plus_normal_force_penalty`. |
+| `--force-alpha F` | `0.1` | Per-step penalty weight: `alpha × wire_force_normal_instant_N`. Active when profile is `default_plus_normal_force_penalty`. |
+| `--force-beta F` | `1.0` | Terminal/truncation penalty weight: `beta × wire_force_normal_trial_max_N`. Active when profile is `default_plus_normal_force_penalty`. |
+| `--force-region REGION` | `whole_wire` | `whole_wire` or `tip`. Selects which region's normal force is used in the penalty. |
 
 ### Resume
 
@@ -195,33 +194,27 @@ Standard ArchVar reward:
 R = R_base
 ```
 
-### `default_plus_force_penalty`
+### `default_plus_normal_force_penalty`
 
-Adds a linear wall-force penalty on top of the default reward:
-
-```
-R = R_base - force_penalty_factor × wall_force_N
-```
-
-where `wall_force_N` is the peak wall contact force in Newtons measured during that simulation step.
-
-### `default_plus_excess_force_penalty`
-
-Adds a threshold-gated penalty that only activates above one force threshold:
+Adds per-step and terminal penalties based on the surface-normal contact force component:
 
 ```
-R = R_base + R_force
+R = R_base - alpha × wire_force_normal_instant_N          (every step)
 
-R_force = -((wall_force_N - force_threshold_N) / force_divisor)   if wall_force_N > force_threshold_N
-          0.0                                                     otherwise
+At terminal/truncation:
+R_terminal = -beta × wire_force_normal_trial_max_N
 ```
+
+where:
+- `wire_force_normal_instant_N` is the instantaneous whole-wire surface-normal contact force at the current step (in Newtons)
+- `wire_force_normal_trial_max_N` is the trial-maximum surface-normal force seen so far
 
 Default parameters:
+- `alpha = 0.1`
+- `beta = 1.0`
+- `region = whole_wire`
 
-- `force_threshold_N = 0.85`
-- `force_divisor = 1000.0`
-
-This is the softer option: small contact forces are not penalized, and only the excess above the threshold reduces reward.
+With `--force-region tip`, the tip-region quantities (`tip_force_normal_instant_N`, `tip_force_normal_trial_max_N`) are used instead.
 
 ---
 
@@ -233,27 +226,41 @@ The force penalty reads wall contact forces directly from the SOFA physics simul
 SOFA LCP solver
     └─ EvalV2ForceTelemetryCollector   (steve_recommender/eval_v2/force_telemetry.py)
            └─ ForceRuntime             (train_v2/telemetry/force_runtime.py)
-                  └─ ForcePenaltyReward.step()
+                  └─ ForceComponent.step()
 ```
 
 **Per environment step:**
 
-1. `ForcePenaltyReward.step()` calls `ForceRuntime.sample_step(intervention, step_index)`.
+1. `ForceComponent.step()` calls `ForceRuntime.sample_step(intervention, step_index)`.
 2. `ForceRuntime` calls `EvalV2ForceTelemetryCollector.capture_step()`, which reads `constraintForces` from the SOFA LCP object and projects them to per-DOF world-space forces.
-3. `build_summary()` returns a `ForceTelemetrySummary` with `total_force_norm_max_newton` (peak total wall force across all contacts this step) and `tip_force_total_norm_N` (summed tip-region contact force).
-4. `ForcePenaltyReward` reads the appropriate field and computes `reward = -factor × magnitude`.
+3. `sample_step()` returns a `ForceRewardSample` with four fields: `wire_force_normal_instant_N`, `wire_force_normal_trial_max_N`, `tip_force_normal_instant_N`, `tip_force_normal_trial_max_N`.
+4. `ForceComponent` reads the appropriate field (based on `--force-region`) and computes the penalty.
 
-**Force telemetry modes** (configured via `RewardSpec.force_telemetry_mode`, default `constraint_projected_si_validated`):
+**Why surface-normal force?**
 
-| Mode | Description |
-|------|-------------|
-| `constraint_projected_si_validated` | Projects SOFA constraint rows to world-space per-DOF force vectors using LCP impulses ÷ dt, with SI unit conversion (mm/kg/s → N). Most accurate. |
-| `intrusive_lcp` | Reads raw LCP `constraintForces` directly with no spatial projection or unit conversion. |
-| `passive` | Reads the optional `WireWallForceMonitor` plugin if present; silently returns zero if the plugin is not available. |
+The surface-normal component of contact force (force projected onto the vessel wall's outward normal) is the mechanically relevant quantity for vessel injury risk. The vector magnitude includes tangential friction components that do not contribute to radial wall stress. Using the normal component gives a more physically meaningful safety signal.
 
-When using `constraint_projected_si_validated` the unit conversion assumes SOFA scene units of mm / kg / s, which is the standard stEVE scene configuration.
+**Field naming convention:**
 
-**Tip-only mode** (`--force-tip-only`): classifies collision DOFs within 3 mm arc length from the distal wire end as tip contacts, and uses their summed force norm instead of the total wall force.
+| Prefix | Scope |
+|--------|-------|
+| `wire_` | Whole guidewire |
+| `tip_` | Distal tip region only |
+
+| Quantity | Meaning |
+|----------|---------|
+| `force_normal` | Surface-normal contact force component |
+| `force_magnitude` | Vector norm (all components) |
+
+| Reduction | Meaning |
+|-----------|---------|
+| `_instant` | Current step value |
+| `_trial_max` | Trial maximum so far |
+| `_trial_mean` | Trial mean so far |
+
+All values in Newtons (`_N` suffix).
+
+The canonical safety quantity used by both the training reward and eval scoring is `wire_force_normal_trial_max_N`.
 
 ---
 
@@ -275,7 +282,7 @@ python -m steve_recommender.train_v2 train \
   --output-root /tmp/tv2_smoke
 ```
 
-### Full run with linear force penalty (GPU, custom tool, replay buffer)
+### Full run with normal-force penalty (GPU)
 
 ```bash
 source scripts/sofa_env.sh
@@ -301,36 +308,10 @@ python -m steve_recommender.train_v2 train \
   --train-max-steps 20 \
   --eval-max-steps 20 \
   --save-latest-replay-buffer \
-  --reward-profile default_plus_force_penalty \
-  --force-penalty-factor 0.01 \
-  --output-root "$RESULTS"
-```
-
-### Full run with excess-force penalty
-
-```bash
-source scripts/sofa_env.sh
-
-RUN_NAME="amplatz_force_threshold_01"
-RESULTS="/tmp/tv2_results"
-
-python -m steve_recommender.train_v2 train \
-  --name "$RUN_NAME" \
-  --tool jshaped_default \
-  --tool-module steve_recommender.bench.custom_tools_amplatz_tight_j_simple \
-  --tool-class JShapedAmplatzSuperStiffTightJSimple \
-  --trainer-device cuda:0 \
-  --worker-count 2 \
-  --heatup-steps 100 \
-  --training-steps 1000 \
-  --eval-every 500 \
-  --explore-episodes-between-updates 2 \
-  --train-max-steps 20 \
-  --eval-max-steps 20 \
-  --reward-profile default_plus_excess_force_penalty \
-  --force-threshold 0.85 \
-  --force-divisor 1000 \
-  --force-tip-only \
+  --reward-profile default_plus_normal_force_penalty \
+  --force-alpha 0.1 \
+  --force-beta 1.0 \
+  --force-region whole_wire \
   --output-root "$RESULTS"
 ```
 

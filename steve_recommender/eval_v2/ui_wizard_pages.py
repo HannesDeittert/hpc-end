@@ -1660,13 +1660,14 @@ class ResultsPage(WizardPage):
         self.leaderboard_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.leaderboard_table.setSelectionMode(QTableWidget.SingleSelection)
 
-        self.deep_dive_table = QTableWidget(0, 7)
+        self.deep_dive_table = QTableWidget(0, 8)
         self.deep_dive_table.setHorizontalHeaderLabels(
             (
                 "Trial",
                 "Success",
                 "Valid",
                 "Time (steps)",
+                "End Reason",
                 "Max Force (N)",
                 "Trial Score",
                 "Replay",
@@ -2294,9 +2295,7 @@ class ResultsPage(WizardPage):
             )
             force_value = None
             if trial.telemetry.forces is not None:
-                force_value = trial.telemetry.forces.total_force_norm_max_newton
-                if force_value is None:
-                    force_value = trial.telemetry.forces.total_force_norm_max
+                force_value = trial.telemetry.forces.wire_force_normal_trial_max_N
             time_value = trial.telemetry.steps_to_success
             if time_value is None:
                 time_value = trial.telemetry.steps_total
@@ -2316,13 +2315,18 @@ class ResultsPage(WizardPage):
             self.deep_dive_table.setItem(
                 idx,
                 4,
+                QTableWidgetItem(str(trial.telemetry.end_reason)),
+            )
+            self.deep_dive_table.setItem(
+                idx,
+                5,
                 QTableWidgetItem(
                     "n/a" if force_value is None else f"{float(force_value):.4f}"
                 ),
             )
             self.deep_dive_table.setItem(
                 idx,
-                5,
+                6,
                 QTableWidgetItem(
                     f"{float(soft_score_total(breakdown=breakdown, scoring=scoring)):.4f}"
                 ),
@@ -2335,7 +2339,7 @@ class ResultsPage(WizardPage):
                     trial_index
                 )
             )
-            self.deep_dive_table.setCellWidget(idx, 6, view_button)
+            self.deep_dive_table.setCellWidget(idx, 7, view_button)
 
     def _open_trial_trace_by_index(self, trial_index: int) -> None:
         if trial_index < 0 or trial_index >= len(self._current_wire_trials):

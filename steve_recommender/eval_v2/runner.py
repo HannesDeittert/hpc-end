@@ -286,6 +286,32 @@ def build_single_trial_env(
     )
 
 
+def _trial_end_reason(env: Env, *, terminated: bool, truncated: bool) -> str:
+    if terminated:
+        return "target_reached"
+    reasons: list[str] = []
+    if truncated:
+        truncations = getattr(env.truncation, "truncations", (env.truncation,))
+        for truncation in truncations:
+            try:
+                is_active = bool(truncation.truncated)
+            except Exception:
+                is_active = False
+            if not is_active:
+                continue
+            if isinstance(truncation, MaxSteps):
+                reasons.append("max_steps")
+            elif isinstance(truncation, VesselEnd):
+                reasons.append("vessel_end")
+            elif isinstance(truncation, SimError):
+                reasons.append("simulation_error")
+            else:
+                reasons.append(type(truncation).__name__)
+    if reasons:
+        return "+".join(dict.fromkeys(reasons))
+    return "loop_exhausted"
+
+
 def _reset_single_trial_env(
     env: Env,
     *,
@@ -504,9 +530,12 @@ def _read_collision_positions_mm(intervention: Any) -> np.ndarray:
 
 
 def _distal_tip_position_mm(intervention: Any) -> np.ndarray:
-    positions = np.asarray(intervention.simulation.dof_positions, dtype=np.float32).reshape(
-        (-1, 3)
-    )
+    try:
+        positions = np.asarray(
+            intervention.simulation.dof_positions, dtype=np.float32
+        ).reshape((-1, 3))
+    except AttributeError:
+        return np.zeros((3,), dtype=np.float32)
     if positions.shape[0] == 0:
         return np.zeros((3,), dtype=np.float32)
     return np.asarray(positions[-1], dtype=np.float32)
@@ -763,6 +792,8 @@ def run_single_trial(
         episode_reward = 0.0
         last_info = dict(info)
         steps_to_success: int | None = None
+        last_terminated = False
+        last_truncated = False
         wall_time_start = time.perf_counter()
         wire_record_cursor = 0
         triangle_record_cursor = 0
@@ -795,6 +826,8 @@ def run_single_trial(
                 )
             )
             observation, reward, terminated, truncated, info = env.step(env_action)
+            last_terminated = bool(terminated)
+            last_truncated = bool(truncated)
             tip_positions_mm.append(_distal_tip_position_mm(runtime.intervention))
             force_collector.capture_step(
                 intervention=runtime.intervention,
@@ -887,6 +920,11 @@ def run_single_trial(
             steps_total=steps_total,
             steps_to_success=steps_to_success,
             episode_reward=float(episode_reward),
+            end_reason=_trial_end_reason(
+                env,
+                terminated=last_terminated,
+                truncated=last_truncated,
+            ),
             wall_time_s=wall_time_s,
             sim_time_s=float(steps_total) * runtime.scenario.action_dt_s,
             path_ratio_last=_optional_finite(last_info.get("path_ratio")),
@@ -894,8 +932,12 @@ def run_single_trial(
             average_translation_speed_last=_optional_finite(
                 last_info.get("average_translation_speed")
             ),
-            tip_speed_max_mm_s=tip_motion["tip_speed_max_mm_s"],
-            tip_speed_mean_mm_s=tip_motion["tip_speed_mean_mm_s"],
+            tip_speed_max_mm_s=max(translation_speeds_mm_s) if translation_speeds_mm_s else 0.0,
+            tip_speed_mean_mm_s=(
+                sum(translation_speeds_mm_s) / len(translation_speeds_mm_s)
+                if translation_speeds_mm_s
+                else 0.0
+            ),
             tip_total_distance_mm=tip_motion["tip_total_distance_mm"],
             tip_acc_p95=tip_motion["tip_acc_p95"],
             tip_acc_max=tip_motion["tip_acc_max"],

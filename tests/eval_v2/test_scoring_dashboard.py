@@ -29,8 +29,7 @@ def _summary(*, success_rate: float, time_value: float, force_value: float) -> C
         steps_total_mean=time_value,
         steps_to_success_mean=time_value,
         tip_speed_max_mean_mm_s=0.0,
-        wall_force_max_mean=force_value,
-        wall_force_max_mean_newton=force_value,
+        wire_force_normal_trial_max_mean_N=force_value,
         force_available_rate=1.0,
     )
 

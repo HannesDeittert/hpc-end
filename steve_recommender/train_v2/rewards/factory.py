@@ -9,7 +9,7 @@ from eve.reward import PathLengthDelta, Step, TargetReached
 
 from ..config import RewardSpec
 from ..telemetry.force_runtime import ForceRuntime
-from .force import ExcessForcePenaltyReward, ForcePenaltyReward
+from .force import NormalForcePenaltyReward
 from .tracker import RewardTracker
 
 
@@ -19,6 +19,8 @@ def build_reward(
     pathfinder,
     reward_spec: RewardSpec,
     telemetry: Optional[ForceRuntime] = None,
+    terminal=None,
+    truncation=None,
     csv_path: Optional[Path] = None,
 ) -> RewardTracker:
     """Build a tracked reward combination from the local train_v2 reward spec."""
@@ -36,36 +38,26 @@ def build_reward(
         ("step", Step(factor=reward_spec.step_factor)),
     ]
 
-    if reward_spec.profile == "default_plus_force_penalty":
+    if reward_spec.profile == "default_plus_normal_force_penalty":
         if telemetry is None:
             raise ValueError(
-                "telemetry is required for profile=default_plus_force_penalty"
+                "telemetry is required for profile=default_plus_normal_force_penalty"
+            )
+        if terminal is None or truncation is None:
+            raise ValueError(
+                "terminal and truncation are required for profile=default_plus_normal_force_penalty"
             )
         components.append(
             (
                 "force",
-                ForcePenaltyReward(
+                NormalForcePenaltyReward(
                     intervention=intervention,
                     telemetry=telemetry,
-                    factor=reward_spec.force_penalty_factor,
-                    tip_only=reward_spec.force_tip_only,
-                ),
-            )
-        )
-    elif reward_spec.profile == "default_plus_excess_force_penalty":
-        if telemetry is None:
-            raise ValueError(
-                "telemetry is required for profile=default_plus_excess_force_penalty"
-            )
-        components.append(
-            (
-                "force",
-                ExcessForcePenaltyReward(
-                    intervention=intervention,
-                    telemetry=telemetry,
-                    threshold_N=reward_spec.force_threshold_N,
-                    divisor=reward_spec.force_divisor,
-                    tip_only=reward_spec.force_tip_only,
+                    terminal=terminal,
+                    truncation=truncation,
+                    alpha=reward_spec.force_alpha,
+                    beta=reward_spec.force_beta,
+                    force_region=reward_spec.force_region,
                 ),
             )
         )

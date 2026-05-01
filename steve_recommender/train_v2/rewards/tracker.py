@@ -39,6 +39,9 @@ class RewardTracker(Reward):
         self._csv_resolved: Optional[Path] = None
         self._episode_totals = [0.0] * len(self._rewards)
         self._last_episode_totals: Dict[str, float] = {}
+        self._last_step_components: Dict[str, float] = {
+            name: 0.0 for name in self._names
+        }
         self._step_count = 0
         self._episode_nr = 0
         self.reward = 0.0
@@ -51,6 +54,10 @@ class RewardTracker(Reward):
     def last_episode_totals(self) -> Dict[str, float]:
         """Episode totals from the most recently completed episode."""
         return dict(self._last_episode_totals)
+
+    @property
+    def last_step_components(self) -> Dict[str, float]:
+        return dict(self._last_step_components)
 
     def _resolved_path(self) -> Optional[Path]:
         if self._csv_base is None:
@@ -73,6 +80,7 @@ class RewardTracker(Reward):
         total = 0.0
         for i, r in enumerate(self._rewards):
             r.step()
+            self._last_step_components[self._names[i]] = float(r.reward)
             self._episode_totals[i] += r.reward
             total += r.reward
         self.reward = total
@@ -82,11 +90,44 @@ class RewardTracker(Reward):
         if self._step_count > 0:
             self._flush_episode()
         self._episode_totals = [0.0] * len(self._rewards)
+        self._last_step_components = {name: 0.0 for name in self._names}
         self._step_count = 0
         self._episode_nr = episode_nr
         self.reward = 0.0
         for r in self._rewards:
             r.reset(episode_nr)
+
+    def debug_snapshot(self) -> Dict[str, float]:
+        snapshot: Dict[str, float] = {
+            "reward_total": float(self.reward),
+        }
+        for name, value in self._last_step_components.items():
+            snapshot[f"reward_{name}"] = float(value)
+        force_component = None
+        for name, reward in zip(self._names, self._rewards):
+            if name == "force":
+                force_component = reward
+                break
+        if force_component is not None:
+            snapshot["force_step_penalty"] = float(
+                getattr(force_component, "last_step_penalty", 0.0)
+            )
+            snapshot["force_terminal_penalty"] = float(
+                getattr(force_component, "last_terminal_penalty", 0.0)
+            )
+            snapshot["wire_force_normal_instant_N"] = float(
+                getattr(force_component, "last_wire_force_normal_instant_N", 0.0)
+            )
+            snapshot["wire_force_normal_trial_max_N"] = float(
+                getattr(force_component, "last_wire_force_normal_trial_max_N", 0.0)
+            )
+            snapshot["tip_force_normal_instant_N"] = float(
+                getattr(force_component, "last_tip_force_normal_instant_N", 0.0)
+            )
+            snapshot["tip_force_normal_trial_max_N"] = float(
+                getattr(force_component, "last_tip_force_normal_trial_max_N", 0.0)
+            )
+        return snapshot
 
     def _flush_episode(self) -> None:
         self._last_episode_totals = dict(zip(self._names, self._episode_totals))

@@ -594,7 +594,50 @@ Rules:
 - visualization is serial only
 - `--visualize` cannot be combined with `--workers > 1`
 
-### 6.11 Useful additional execution options
+### 6.11 Resuming an interrupted run
+
+If a cluster job hits wall time or is otherwise interrupted, completed trials are
+already written to `trials.h5` inside the output directory. Pass that directory
+to `--resume-output-dir` to skip those trials and run only the remaining ones:
+
+```bash
+# Original run (interrupted after some trials)
+python -m steve_recommender.eval_v2.cli run \
+  --job-name my_eval \
+  --anatomy Tree_00 \
+  --execution-wire steve_default/standard_j \
+  --policy-agent-ref steve_default/standard_j:archvar_original_best \
+  --target-mode branch_end \
+  --target-branches lcca \
+  --trial-count 10
+
+# Resume from the existing output directory
+python -m steve_recommender.eval_v2.cli run \
+  --job-name my_eval \
+  --resume-output-dir results/eval_runs/my_eval_<timestamp> \
+  --anatomy Tree_00 \
+  --execution-wire steve_default/standard_j \
+  --policy-agent-ref steve_default/standard_j:archvar_original_best \
+  --target-mode branch_end \
+  --target-branches lcca \
+  --trial-count 10
+```
+
+How it works:
+
+- Each trial is persisted to `trials.h5` immediately after it completes.
+- On resume, completed trials are identified by `(scenario, candidate, wire, trial_index)`.
+- Already-completed trials are skipped; only missing trials are executed.
+- At the end, the manifest, candidate summaries, and report are rewritten from all trials (completed + newly run).
+- Both serial and parallel (`--workers N`) execution paths support resume.
+
+Rules:
+
+- Pass **all the same flags** as the original run (scenario, candidate, seeds, trial count, etc.). The resume flag only controls the output directory; it does not restore job configuration.
+- The `--job-name` is ignored when `--resume-output-dir` is set; the existing directory is used as-is.
+- If the output directory contains no `trials.h5`, the run starts fresh (safe to use even on a first attempt).
+
+### 6.12 Useful additional execution options
 
 - `--threshold-mm`
   - target success threshold
@@ -649,7 +692,7 @@ Rules:
 - `--output-root`
   - top-level directory for generated report folders
 
-### 6.12 About “comparison” in the CLI
+### 6.13 About “comparison” in the CLI
 
 The current CLI `run` command builds **one candidate per invocation**.
 
@@ -666,7 +709,7 @@ current practical solution is a wrapper script that invokes `eval_v2.cli run`
 multiple times with the same `--trial-count`, `--base-seed`, `--env-seeds`,
 `--policy-base-seed`, and `--policy-seeds` choices.
 
-### 6.13 Replay viewer
+### 6.14 Replay viewer
 
 Persisted Phase E trial traces can be replayed directly from the CLI:
 
@@ -755,7 +798,7 @@ The exact scoring parameters used by one run are persisted in `manifest.json`
 under `scoring_spec`.
 
 Trace files can be replayed through the standalone viewer CLI or the inline GUI
-replay panel described in sections 6.13 and 8.10.
+replay panel described in sections 6.14 and 8.10.
 
 ## 8. GUI usage
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import csv
+import inspect
 import json
 import logging
 import math
@@ -125,6 +126,7 @@ def _run_parallel_trial_tasks_process(
     task_runner: Callable[
         [_ParallelTrialTask], _ParallelTrialOutcome
     ] = _run_parallel_trial_task,
+    outcome_callback: Optional[Callable[[_ParallelTrialOutcome], None]] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[_ParallelTrialOutcome, ...]:
     if not tasks:
@@ -145,6 +147,8 @@ def _run_parallel_trial_tasks_process(
         for future in concurrent.futures.as_completed(futures):
             outcome = future.result()
             outcomes.append(outcome)
+            if outcome_callback is not None:
+                outcome_callback(outcome)
             completed += 1
             if progress_callback is not None:
                 progress_callback(
@@ -317,8 +321,7 @@ def _summary_row(summary: CandidateSummary) -> dict[str, Any]:
         "steps_total_mean": summary.steps_total_mean,
         "steps_to_success_mean": summary.steps_to_success_mean,
         "tip_speed_max_mean_mm_s": summary.tip_speed_max_mean_mm_s,
-        "wall_force_max_mean": summary.wall_force_max_mean,
-        "wall_force_max_mean_newton": summary.wall_force_max_mean_newton,
+        "wire_force_normal_trial_max_mean_N": summary.wire_force_normal_trial_max_mean_N,
         "force_available_rate": summary.force_available_rate,
     }
 
@@ -345,6 +348,7 @@ def _trial_rows(trials: Tuple[TrialResult, ...], *, max_episode_steps: int, tip_
                 "force_within_safety_threshold": bool(trial.force_within_safety_threshold),
                 "steps_total": int(trial.telemetry.steps_total),
                 "steps_to_success": trial.telemetry.steps_to_success,
+                "end_reason": trial.telemetry.end_reason,
                 "max_episode_steps": int(max_episode_steps),
                 "episode_reward": float(trial.telemetry.episode_reward),
                 "sim_time_s": trial.telemetry.sim_time_s,
@@ -352,20 +356,45 @@ def _trial_rows(trials: Tuple[TrialResult, ...], *, max_episode_steps: int, tip_
                 "tip_speed_max_mm_s": trial.telemetry.tip_speed_max_mm_s,
                 "tip_speed_mean_mm_s": trial.telemetry.tip_speed_mean_mm_s,
                 "tip_total_distance_mm": trial.telemetry.tip_total_distance_mm,
+                "metric_version": "v2_normal_component",
                 "force_available_for_score": bool(
                     forces is not None and forces.available_for_score
                 ),
-                "force_total_norm_max_N": (
-                    None if forces is None else forces.total_force_norm_max_newton
+                "wire_force_magnitude_instant_N": (
+                    None if forces is None else forces.wire_force_magnitude_instant_N
                 ),
-                "force_total_norm_mean_N": (
-                    None if forces is None else forces.total_force_norm_mean_newton
+                "wire_force_magnitude_trial_max_N": (
+                    None if forces is None else forces.wire_force_magnitude_trial_max_N
                 ),
-                "tip_force_peak_normal_N": (
-                    None if forces is None else forces.tip_force_peak_normal_N
+                "wire_force_magnitude_trial_mean_N": (
+                    None if forces is None else forces.wire_force_magnitude_trial_mean_N
                 ),
-                "tip_force_total_mean_N": (
-                    None if forces is None else forces.tip_force_total_mean_N
+                "wire_force_normal_instant_N": (
+                    None if forces is None else forces.wire_force_normal_instant_N
+                ),
+                "wire_force_normal_trial_max_N": (
+                    None if forces is None else forces.wire_force_normal_trial_max_N
+                ),
+                "wire_force_normal_trial_mean_N": (
+                    None if forces is None else forces.wire_force_normal_trial_mean_N
+                ),
+                "tip_force_magnitude_instant_N": (
+                    None if forces is None else forces.tip_force_magnitude_instant_N
+                ),
+                "tip_force_magnitude_trial_max_N": (
+                    None if forces is None else forces.tip_force_magnitude_trial_max_N
+                ),
+                "tip_force_magnitude_trial_mean_N": (
+                    None if forces is None else forces.tip_force_magnitude_trial_mean_N
+                ),
+                "tip_force_normal_instant_N": (
+                    None if forces is None else forces.tip_force_normal_instant_N
+                ),
+                "tip_force_normal_trial_max_N": (
+                    None if forces is None else forces.tip_force_normal_trial_max_N
+                ),
+                "tip_force_normal_trial_mean_N": (
+                    None if forces is None else forces.tip_force_normal_trial_mean_N
                 ),
                 "tip_length_mm": float(tip_length_mm),
                 "tip_acc_p95": trial.telemetry.tip_acc_p95,
@@ -374,8 +403,14 @@ def _trial_rows(trials: Tuple[TrialResult, ...], *, max_episode_steps: int, tip_
                 "tip_jerk_max": trial.telemetry.tip_jerk_max,
                 "score_success": float(trial.score.success),
                 "score_efficiency": float(trial.score.efficiency),
-                "score_safety": float(trial.score.safety),
-                "score_smoothness": trial.score.smoothness,
+                "score_safety": (
+                    None if trial.score.safety is None else float(trial.score.safety)
+                ),
+                "score_smoothness": (
+                    None
+                    if trial.score.smoothness is None
+                    else float(trial.score.smoothness)
+                ),
                 "score_total": float(trial.score.total),
                 "trace_h5_path": (
                     None
@@ -391,6 +426,7 @@ def _write_trials_h5(path: Path, rows: Tuple[dict[str, Any], ...]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     string_dtype = h5py.string_dtype(encoding="utf-8")
     columns = (
+        "metric_version",
         "scenario_name",
         "candidate_name",
         "execution_wire",
@@ -403,6 +439,7 @@ def _write_trials_h5(path: Path, rows: Tuple[dict[str, Any], ...]) -> None:
         "force_within_safety_threshold",
         "steps_total",
         "steps_to_success",
+        "end_reason",
         "max_episode_steps",
         "episode_reward",
         "sim_time_s",
@@ -410,11 +447,19 @@ def _write_trials_h5(path: Path, rows: Tuple[dict[str, Any], ...]) -> None:
         "tip_speed_max_mm_s",
         "tip_speed_mean_mm_s",
         "tip_total_distance_mm",
+        "wire_force_magnitude_instant_N",
+        "wire_force_magnitude_trial_max_N",
+        "wire_force_magnitude_trial_mean_N",
+        "wire_force_normal_instant_N",
+        "wire_force_normal_trial_max_N",
+        "wire_force_normal_trial_mean_N",
+        "tip_force_magnitude_instant_N",
+        "tip_force_magnitude_trial_max_N",
+        "tip_force_magnitude_trial_mean_N",
+        "tip_force_normal_instant_N",
+        "tip_force_normal_trial_max_N",
+        "tip_force_normal_trial_mean_N",
         "force_available_for_score",
-        "force_total_norm_max_N",
-        "force_total_norm_mean_N",
-        "tip_force_peak_normal_N",
-        "tip_force_total_mean_N",
         "tip_length_mm",
         "tip_acc_p95",
         "tip_acc_max",
@@ -429,14 +474,17 @@ def _write_trials_h5(path: Path, rows: Tuple[dict[str, Any], ...]) -> None:
     )
     with h5py.File(path, "w") as handle:
         handle.attrs["schema_version"] = 1
+        handle.attrs["metric_version"] = "v2_normal_component"
         group = handle.create_group("trials")
         for column in columns:
             values = [row.get(column) for row in rows]
             if column in {
+                "metric_version",
                 "scenario_name",
                 "candidate_name",
                 "execution_wire",
                 "trained_on_wire",
+                "end_reason",
                 "trace_h5_path",
             }:
                 group.create_dataset(
@@ -549,6 +597,7 @@ def _write_report_artifacts(
         }
         payload = {
             "schema_version": 1,
+            "metric_version": "v2_normal_component",
             "job_name": report.job_name,
             "generated_time": report.generated_at,
             "anatomy_metadata": anatomy_metadata,
@@ -686,22 +735,12 @@ def summarize_trials(
         tip_speed_max_mean_mm_s=_finite_mean(
             tuple(trial.telemetry.tip_speed_max_mm_s for trial in trials)
         ),
-        wall_force_max_mean=_finite_mean(
+        wire_force_normal_trial_max_mean_N=_finite_mean(
             tuple(
                 (
                     None
                     if trial.telemetry.forces is None
-                    else trial.telemetry.forces.total_force_norm_max
-                )
-                for trial in trials
-            )
-        ),
-        wall_force_max_mean_newton=_finite_mean(
-            tuple(
-                (
-                    None
-                    if trial.telemetry.forces is None
-                    else trial.telemetry.forces.total_force_norm_max_newton
+                    else trial.telemetry.forces.wire_force_normal_trial_max_N
                 )
                 for trial in trials
             )
@@ -956,12 +995,22 @@ class LocalEvaluationRunner:
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> EvaluationReport:
         generated_at = self._generated_at_factory()
-        output_dir = _job_output_dir(
-            output_root=job.output_root,
-            job_name=job.name,
-            generated_at=generated_at,
+        output_dir = (
+            Path(job.resume_output_dir)
+            if job.resume_output_dir is not None
+            else _job_output_dir(
+                output_root=job.output_root,
+                job_name=job.name,
+                generated_at=generated_at,
+            )
         )
         pre_write_meshes_for_job(job, output_dir)
+        trials: list[TrialResult] = list(self._load_resume_trials_if_available(output_dir))
+        completed_trial_keys = self._completed_trial_keys(trials)
+        if progress_callback is not None and trials:
+            progress_callback(
+                f"resume_loaded completed_trials={len(trials)} output_dir={output_dir}"
+            )
         worker_count = max(1, int(job.execution.worker_count))
         use_parallel = (
             worker_count > 1
@@ -980,6 +1029,8 @@ class LocalEvaluationRunner:
                 generated_at=generated_at,
                 output_dir=output_dir,
                 worker_count=worker_count,
+                existing_trials=tuple(trials),
+                completed_trial_keys=completed_trial_keys,
                 progress_callback=progress_callback,
             )
 
@@ -989,13 +1040,20 @@ class LocalEvaluationRunner:
             and self._runtime_factory is prepare_evaluation_runtime
             and self._trial_runner is run_single_trial
         )
-        trials: list[TrialResult] = []
         for scenario in job.scenarios:
             for candidate in job.candidates:
                 if isolate_headless_trials:
                     for trial_index, (seed, _policy_seed) in enumerate(
                         job.execution.trial_seed_pairs
                     ):
+                        trial_key = self._trial_identity(
+                            scenario_name=scenario.name,
+                            candidate_name=candidate.name,
+                            execution_wire=candidate.execution_wire.tool_ref,
+                            trial_index=trial_index,
+                        )
+                        if trial_key in completed_trial_keys:
+                            continue
                         if progress_callback is not None:
                             progress_callback(
                                 "runtime_prepare "
@@ -1022,6 +1080,12 @@ class LocalEvaluationRunner:
                                 progress_callback=progress_callback,
                             )
                             trials.append(trial)
+                            completed_trial_keys.add(trial_key)
+                            self._persist_partial_trials(
+                                output_dir=output_dir,
+                                trials=tuple(trials),
+                                job=job,
+                            )
                         finally:
                             _maybe_close(runtime.play_policy)
                             _maybe_close(runtime.intervention)
@@ -1043,6 +1107,14 @@ class LocalEvaluationRunner:
                     for trial_index, (seed, _policy_seed) in enumerate(
                         job.execution.trial_seed_pairs
                     ):
+                        trial_key = self._trial_identity(
+                            scenario_name=scenario.name,
+                            candidate_name=candidate.name,
+                            execution_wire=candidate.execution_wire.tool_ref,
+                            trial_index=trial_index,
+                        )
+                        if trial_key in completed_trial_keys:
+                            continue
                         trial = self._trial_runner(
                             runtime=runtime,
                             trial_index=trial_index,
@@ -1054,10 +1126,17 @@ class LocalEvaluationRunner:
                             progress_callback=progress_callback,
                         )
                         trials.append(trial)
+                        completed_trial_keys.add(trial_key)
+                        self._persist_partial_trials(
+                            output_dir=output_dir,
+                            trials=tuple(trials),
+                            job=job,
+                        )
                 finally:
                     _maybe_close(runtime.play_policy)
                     _maybe_close(runtime.intervention)
 
+        trials = self._sorted_trials(tuple(trials))
         summaries = tuple(
             summarize_trials(
                 tuple(
@@ -1088,9 +1167,13 @@ class LocalEvaluationRunner:
         *,
         generated_at: str,
         output_dir: Path,
-        worker_count: int,
+            worker_count: int,
+        existing_trials: Tuple[TrialResult, ...],
+        completed_trial_keys: set[tuple[str, str, str, int]],
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> EvaluationReport:
+        trials: list[TrialResult] = list(existing_trials)
+
         tasks = tuple(
             _ParallelTrialTask(
                 scenario_index=scenario_index,
@@ -1111,11 +1194,25 @@ class LocalEvaluationRunner:
             for trial_index, (seed, policy_seed) in enumerate(
                 job.execution.trial_seed_pairs
             )
+            if self._trial_identity(
+                scenario_name=scenario.name,
+                candidate_name=candidate.name,
+                execution_wire=candidate.execution_wire.tool_ref,
+                trial_index=trial_index,
+            )
+            not in completed_trial_keys
         )
-        outcomes = self._parallel_task_runner(
+        outcomes, used_outcome_callback = self._invoke_parallel_task_runner(
             tasks,
             worker_count=worker_count,
             progress_callback=progress_callback,
+            outcome_callback=lambda outcome: self._handle_parallel_outcome(
+                outcome=outcome,
+                trials=trials,
+                completed_trial_keys=completed_trial_keys,
+                output_dir=output_dir,
+                job=job,
+            ),
         )
         outcomes = tuple(
             sorted(
@@ -1127,7 +1224,9 @@ class LocalEvaluationRunner:
                 ),
             )
         )
-        trials = tuple(outcome.trial for outcome in outcomes)
+        if not used_outcome_callback:
+            trials.extend(outcome.trial for outcome in outcomes)
+        trials = list(self._sorted_trials(tuple(trials)))
         summaries = tuple(
             summarize_trials(
                 tuple(
@@ -1150,6 +1249,117 @@ class LocalEvaluationRunner:
             execution_plan=job.execution,
             scoring_spec=job.scoring,
             artifacts=EvaluationArtifacts(output_dir=output_dir),
+        )
+
+    def _invoke_parallel_task_runner(
+        self,
+        tasks: Sequence[_ParallelTrialTask],
+        *,
+        worker_count: int,
+        progress_callback: Optional[Callable[[str], None]],
+        outcome_callback: Callable[[_ParallelTrialOutcome], None],
+    ) -> tuple[Tuple[_ParallelTrialOutcome, ...], bool]:
+        kwargs = {
+            "worker_count": worker_count,
+            "progress_callback": progress_callback,
+        }
+        used_outcome_callback = False
+        try:
+            signature = inspect.signature(self._parallel_task_runner)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None and "outcome_callback" in signature.parameters:
+            kwargs["outcome_callback"] = outcome_callback
+            used_outcome_callback = True
+        return self._parallel_task_runner(tasks, **kwargs), used_outcome_callback
+
+    @staticmethod
+    def _trial_identity(
+        *,
+        scenario_name: str,
+        candidate_name: str,
+        execution_wire: str,
+        trial_index: int,
+    ) -> tuple[str, str, str, int]:
+        return (
+            str(scenario_name),
+            str(candidate_name),
+            str(execution_wire),
+            int(trial_index),
+        )
+
+    def _completed_trial_keys(
+        self, trials: Sequence[TrialResult]
+    ) -> set[tuple[str, str, str, int]]:
+        return {
+            self._trial_identity(
+                scenario_name=trial.scenario_name,
+                candidate_name=trial.candidate_name,
+                execution_wire=trial.execution_wire.tool_ref,
+                trial_index=trial.trial_index,
+            )
+            for trial in trials
+        }
+
+    @staticmethod
+    def _sorted_trials(trials: Tuple[TrialResult, ...]) -> Tuple[TrialResult, ...]:
+        return tuple(
+            sorted(
+                trials,
+                key=lambda trial: (
+                    trial.scenario_name,
+                    trial.candidate_name,
+                    trial.execution_wire.tool_ref,
+                    trial.trial_index,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_resume_trials_if_available(output_dir: Path) -> Tuple[TrialResult, ...]:
+        trials_h5_path = Path(output_dir) / "trials.h5"
+        if not trials_h5_path.exists():
+            return ()
+        return _load_trials_from_h5(trials_h5_path)
+
+    @staticmethod
+    def _persist_partial_trials(
+        *,
+        output_dir: Path,
+        trials: Tuple[TrialResult, ...],
+        job: EvaluationJob,
+    ) -> None:
+        trial_rows = _trial_rows(
+            trials,
+            max_episode_steps=job.execution.max_episode_steps,
+            tip_length_mm=job.scoring.force.tip_length_mm,
+        )
+        _write_trials_h5(Path(output_dir) / "trials.h5", trial_rows)
+
+    def _handle_parallel_outcome(
+        self,
+        *,
+        outcome: _ParallelTrialOutcome,
+        trials: list[TrialResult],
+        completed_trial_keys: set[tuple[str, str, str, int]],
+        output_dir: Path,
+        job: EvaluationJob,
+    ) -> None:
+        trial = outcome.trial
+        trial_key = self._trial_identity(
+            scenario_name=trial.scenario_name,
+            candidate_name=trial.candidate_name,
+            execution_wire=trial.execution_wire.tool_ref,
+            trial_index=trial.trial_index,
+        )
+        if trial_key in completed_trial_keys:
+            return
+        trials.append(trial)
+        completed_trial_keys.add(trial_key)
+        self._persist_partial_trials(
+            output_dir=output_dir,
+            trials=tuple(trials),
+            job=job,
         )
 
 
@@ -1456,7 +1666,8 @@ __all__ = [
 def _to_optional_float(value: Any) -> Optional[float]:
     if value is None:
         return None
-    return float(value)
+    f = float(value)
+    return None if math.isnan(f) else f
 
 
 def _parse_vector3(value: Any) -> tuple[float, float, float]:
@@ -1571,7 +1782,7 @@ def _parse_scoring_spec(payload: Any) -> ScoringSpec:
         force=ForceScoringSpec(
             default_safety_force_source=str(
                 force_payload.get(
-                    "default_safety_force_source", "force_total_norm_max_N"
+                    "default_safety_force_source", "wire_force_normal_trial_max_N"
                 )
             ),
             force_max_N=float(force_payload.get("force_max_N", 2.0)),
@@ -1656,9 +1867,8 @@ def _parse_candidate_summary(payload: dict[str, Any]) -> CandidateSummary:
         steps_total_mean=_to_optional_float(payload.get("steps_total_mean")),
         steps_to_success_mean=_to_optional_float(payload.get("steps_to_success_mean")),
         tip_speed_max_mean_mm_s=_to_optional_float(payload.get("tip_speed_max_mean_mm_s")),
-        wall_force_max_mean=_to_optional_float(payload.get("wall_force_max_mean")),
-        wall_force_max_mean_newton=_to_optional_float(
-            payload.get("wall_force_max_mean_newton")
+        wire_force_normal_trial_max_mean_N=_to_optional_float(
+            payload.get("wire_force_normal_trial_max_mean_N")
         ),
         force_available_rate=_to_optional_float(payload.get("force_available_rate")),
     )
@@ -1701,17 +1911,8 @@ def _parse_force_telemetry(
         ),
         total_force_norm_max=_to_optional_float(payload.get("total_force_norm_max")),
         total_force_norm_mean=_to_optional_float(payload.get("total_force_norm_mean")),
-        total_force_norm_max_newton=_to_optional_float(
-            payload.get("total_force_norm_max_newton")
-        ),
-        total_force_norm_mean_newton=_to_optional_float(
-            payload.get("total_force_norm_mean_newton")
-        ),
         peak_segment_force_norm=_to_optional_float(
             payload.get("peak_segment_force_norm")
-        ),
-        peak_segment_force_norm_newton=_to_optional_float(
-            payload.get("peak_segment_force_norm_newton")
         ),
         peak_segment_force_step=(
             None
@@ -1725,6 +1926,42 @@ def _parse_force_telemetry(
         ),
         peak_segment_force_time_s=_to_optional_float(
             payload.get("peak_segment_force_time_s")
+        ),
+        wire_force_magnitude_instant_N=_to_optional_float(
+            payload.get("wire_force_magnitude_instant_N")
+        ),
+        wire_force_magnitude_trial_max_N=_to_optional_float(
+            payload.get("wire_force_magnitude_trial_max_N")
+        ),
+        wire_force_magnitude_trial_mean_N=_to_optional_float(
+            payload.get("wire_force_magnitude_trial_mean_N")
+        ),
+        wire_force_normal_instant_N=_to_optional_float(
+            payload.get("wire_force_normal_instant_N")
+        ),
+        wire_force_normal_trial_max_N=_to_optional_float(
+            payload.get("wire_force_normal_trial_max_N")
+        ),
+        wire_force_normal_trial_mean_N=_to_optional_float(
+            payload.get("wire_force_normal_trial_mean_N")
+        ),
+        tip_force_magnitude_instant_N=_to_optional_float(
+            payload.get("tip_force_magnitude_instant_N")
+        ),
+        tip_force_magnitude_trial_max_N=_to_optional_float(
+            payload.get("tip_force_magnitude_trial_max_N")
+        ),
+        tip_force_magnitude_trial_mean_N=_to_optional_float(
+            payload.get("tip_force_magnitude_trial_mean_N")
+        ),
+        tip_force_normal_instant_N=_to_optional_float(
+            payload.get("tip_force_normal_instant_N")
+        ),
+        tip_force_normal_trial_max_N=_to_optional_float(
+            payload.get("tip_force_normal_trial_max_N")
+        ),
+        tip_force_normal_trial_mean_N=_to_optional_float(
+            payload.get("tip_force_normal_trial_mean_N")
         ),
         gap_active_projected_count_sum=int(
             payload.get("gap_active_projected_count_sum", 0)
@@ -1743,13 +1980,6 @@ def _parse_force_telemetry(
         tip_force_records=tuple(payload.get("tip_force_records", ())),
         tip_force_total_vector_N=_parse_vector3(
             payload.get("tip_force_total_vector_N")
-        ),
-        tip_force_total_norm_N=float(payload.get("tip_force_total_norm_N", 0.0)),
-        tip_force_peak_normal_N=_to_optional_float(
-            payload.get("tip_force_peak_normal_N")
-        ),
-        tip_force_total_mean_N=_to_optional_float(
-            payload.get("tip_force_total_mean_N")
         ),
         lcp_mapped_wall_row_count_max=int(
             payload.get("lcp_mapped_wall_row_count_max", 0)
@@ -1780,23 +2010,66 @@ def _load_trials_from_h5(path: Path) -> Tuple[TrialResult, ...]:
         execution_wires = _h5_string_column(group, "execution_wire")
         trained_on_wires = _h5_string_column(group, "trained_on_wire")
         trace_paths = _h5_string_column(group, "trace_h5_path")
+        end_reasons = (
+            _h5_string_column(group, "end_reason")
+            if "end_reason" in group
+            else ["unknown"] * n_rows
+        )
         rows: list[TrialResult] = []
         for idx in range(n_rows):
             force_available = bool(group["force_available_for_score"][idx])
-            force_total_norm_max_N = _to_optional_float(group["force_total_norm_max_N"][idx])
-            force_total_norm_mean_N = _to_optional_float(group["force_total_norm_mean_N"][idx])
-            tip_force_peak_normal_N = _to_optional_float(group["tip_force_peak_normal_N"][idx])
-            tip_force_total_mean_N = _to_optional_float(group["tip_force_total_mean_N"][idx])
+            wire_force_magnitude_instant_N = _to_optional_float(
+                group["wire_force_magnitude_instant_N"][idx]
+            )
+            wire_force_magnitude_trial_max_N = _to_optional_float(
+                group["wire_force_magnitude_trial_max_N"][idx]
+            )
+            wire_force_magnitude_trial_mean_N = _to_optional_float(
+                group["wire_force_magnitude_trial_mean_N"][idx]
+            )
+            wire_force_normal_instant_N = _to_optional_float(
+                group["wire_force_normal_instant_N"][idx]
+            )
+            wire_force_normal_trial_max_N = _to_optional_float(
+                group["wire_force_normal_trial_max_N"][idx]
+            )
+            wire_force_normal_trial_mean_N = _to_optional_float(
+                group["wire_force_normal_trial_mean_N"][idx]
+            )
+            tip_force_magnitude_instant_N = _to_optional_float(
+                group["tip_force_magnitude_instant_N"][idx]
+            )
+            tip_force_magnitude_trial_max_N = _to_optional_float(
+                group["tip_force_magnitude_trial_max_N"][idx]
+            )
+            tip_force_magnitude_trial_mean_N = _to_optional_float(
+                group["tip_force_magnitude_trial_mean_N"][idx]
+            )
+            tip_force_normal_instant_N = _to_optional_float(
+                group["tip_force_normal_instant_N"][idx]
+            )
+            tip_force_normal_trial_max_N = _to_optional_float(
+                group["tip_force_normal_trial_max_N"][idx]
+            )
+            tip_force_normal_trial_mean_N = _to_optional_float(
+                group["tip_force_normal_trial_mean_N"][idx]
+            )
             trace_path_text = trace_paths[idx]
             forces = ForceTelemetrySummary(
                 available_for_score=force_available,
                 validation_status="loaded_from_trials_h5",
-                total_force_norm_max_newton=force_total_norm_max_N,
-                total_force_norm_mean_newton=force_total_norm_mean_N,
-                total_force_norm_max=force_total_norm_max_N,
-                total_force_norm_mean=force_total_norm_mean_N,
-                tip_force_peak_normal_N=tip_force_peak_normal_N,
-                tip_force_total_mean_N=tip_force_total_mean_N,
+                wire_force_magnitude_instant_N=wire_force_magnitude_instant_N,
+                wire_force_magnitude_trial_max_N=wire_force_magnitude_trial_max_N,
+                wire_force_magnitude_trial_mean_N=wire_force_magnitude_trial_mean_N,
+                wire_force_normal_instant_N=wire_force_normal_instant_N,
+                wire_force_normal_trial_max_N=wire_force_normal_trial_max_N,
+                wire_force_normal_trial_mean_N=wire_force_normal_trial_mean_N,
+                tip_force_magnitude_instant_N=tip_force_magnitude_instant_N,
+                tip_force_magnitude_trial_max_N=tip_force_magnitude_trial_max_N,
+                tip_force_magnitude_trial_mean_N=tip_force_magnitude_trial_mean_N,
+                tip_force_normal_instant_N=tip_force_normal_instant_N,
+                tip_force_normal_trial_max_N=tip_force_normal_trial_max_N,
+                tip_force_normal_trial_mean_N=tip_force_normal_trial_mean_N,
             )
             rows.append(
                 TrialResult(
@@ -1824,7 +2097,7 @@ def _load_trials_from_h5(path: Path) -> Tuple[TrialResult, ...]:
                         total=float(group["score_total"][idx]),
                         success=float(group["score_success"][idx]),
                         efficiency=float(group["score_efficiency"][idx]),
-                        safety=float(group["score_safety"][idx]),
+                        safety=_to_optional_float(group["score_safety"][idx]),
                         smoothness=_to_optional_float(group["score_smoothness"][idx]),
                     ),
                     telemetry=TrialTelemetrySummary(
@@ -1836,6 +2109,7 @@ def _load_trials_from_h5(path: Path) -> Tuple[TrialResult, ...]:
                             else int(group["steps_to_success"][idx])
                         ),
                         episode_reward=float(group["episode_reward"][idx]),
+                        end_reason=end_reasons[idx],
                         wall_time_s=_to_optional_float(group["wall_time_s"][idx]),
                         sim_time_s=_to_optional_float(group["sim_time_s"][idx]),
                         tip_speed_max_mm_s=_to_optional_float(group["tip_speed_max_mm_s"][idx]),
@@ -1892,6 +2166,7 @@ def _parse_trial_result(payload: dict[str, Any]) -> TrialResult:
                 else int(telemetry_payload.get("steps_to_success"))
             ),
             episode_reward=float(telemetry_payload.get("episode_reward", 0.0)),
+            end_reason=str(telemetry_payload.get("end_reason", "unknown")),
             wall_time_s=_to_optional_float(telemetry_payload.get("wall_time_s")),
             sim_time_s=_to_optional_float(telemetry_payload.get("sim_time_s")),
             path_ratio_last=_to_optional_float(

@@ -35,17 +35,118 @@ DEFAULT_TARGET_BRANCHES = ("lcca",)
 DEFAULT_FRICTION_MU = 0.01
 DEFAULT_FLUORO_FREQUENCY_HZ = 7.5
 DEFAULT_FLUORO_ROT_ZX_DEG = (20.0, 5.0)
-DEFAULT_FORCE_PENALTY_FACTOR = 0.0
-DEFAULT_FORCE_THRESHOLD_N = 0.85
-DEFAULT_FORCE_DIVISOR = 1000.0
+DEFAULT_FORCE_ALPHA = 0.1
+DEFAULT_FORCE_BETA = 1.0
+DEFAULT_FORCE_REGION = "whole_wire"
 DEFAULT_FORCE_TELEMETRY_MODE = "constraint_projected_si_validated"
 DEFAULT_REWARD_PROFILE = "default"
+DEFAULT_STEP_TRACE_EVERY_N_STEPS = 10
+ARCHVAR_EVAL_SEEDS: Tuple[int, ...] = (
+    1,
+    2,
+    3,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    16,
+    17,
+    18,
+    21,
+    22,
+    23,
+    27,
+    31,
+    34,
+    35,
+    37,
+    39,
+    42,
+    43,
+    44,
+    47,
+    48,
+    50,
+    52,
+    55,
+    56,
+    58,
+    61,
+    62,
+    63,
+    68,
+    69,
+    70,
+    71,
+    73,
+    79,
+    80,
+    81,
+    84,
+    89,
+    91,
+    92,
+    93,
+    95,
+    97,
+    102,
+    103,
+    108,
+    109,
+    110,
+    115,
+    116,
+    117,
+    118,
+    120,
+    122,
+    123,
+    124,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    134,
+    136,
+    138,
+    139,
+    140,
+    141,
+    142,
+    143,
+    144,
+    147,
+    148,
+    149,
+    150,
+    151,
+    152,
+    154,
+    155,
+    156,
+    158,
+    159,
+    161,
+    162,
+    167,
+    168,
+    171,
+    175,
+)
 
 RewardProfile = Literal[
     "default",
-    "default_plus_force_penalty",
-    "default_plus_excess_force_penalty",
+    "default_plus_normal_force_penalty",
 ]
+ForceRegion = Literal["whole_wire", "tip_only"]
 ForceTelemetryMode = Literal[
     "passive", "intrusive_lcp", "constraint_projected_si_validated"
 ]
@@ -83,10 +184,9 @@ class RewardSpec:
     target_reached_factor: float = 1.0
     step_factor: float = -0.005
     path_delta_factor: float = 0.001
-    force_penalty_factor: float = DEFAULT_FORCE_PENALTY_FACTOR
-    force_threshold_N: float = DEFAULT_FORCE_THRESHOLD_N
-    force_divisor: float = DEFAULT_FORCE_DIVISOR
-    force_tip_only: bool = False
+    force_alpha: float = DEFAULT_FORCE_ALPHA
+    force_beta: float = DEFAULT_FORCE_BETA
+    force_region: ForceRegion = DEFAULT_FORCE_REGION
     force_telemetry_mode: ForceTelemetryMode = DEFAULT_FORCE_TELEMETRY_MODE
 
     def __post_init__(self) -> None:
@@ -97,26 +197,14 @@ class RewardSpec:
             self.path_delta_factor, field_name="path_delta_factor"
         )
         _require_non_negative_float(
-            self.force_penalty_factor, field_name="force_penalty_factor"
+            self.force_alpha, field_name="force_alpha"
         )
         _require_non_negative_float(
-            self.force_threshold_N, field_name="force_threshold_N"
+            self.force_beta, field_name="force_beta"
         )
-        if self.force_divisor <= 0.0:
-            raise ValueError("force_divisor must be > 0")
-        if (
-            self.profile == "default_plus_force_penalty"
-            and self.force_penalty_factor <= 0.0
-        ):
+        if self.force_region not in {"whole_wire", "tip_only"}:
             raise ValueError(
-                "force_penalty_factor must be > 0 for profile=default_plus_force_penalty"
-            )
-        if (
-            self.profile == "default_plus_excess_force_penalty"
-            and self.force_divisor <= 0.0
-        ):
-            raise ValueError(
-                "force_divisor must be > 0 for profile=default_plus_excess_force_penalty"
+                "force_region must be one of {'whole_wire', 'tip_only'}"
             )
 
 
@@ -168,8 +256,8 @@ class TrainingRunConfig:
     heatup_steps: int = DEFAULT_HEATUP_STEPS
     training_steps: int = DEFAULT_TRAINING_STEPS
     eval_every: int = DEFAULT_EVAL_EVERY
-    eval_episodes: int = 1
-    eval_seeds: Optional[Tuple[int, ...]] = None
+    eval_episodes: Optional[int] = None
+    eval_seeds: Tuple[int, ...] = ARCHVAR_EVAL_SEEDS
     explore_episodes_between_updates: int = DEFAULT_EXPLORE_EPISODES_BETWEEN_UPDATES
     consecutive_action_steps: int = DEFAULT_CONSECUTIVE_ACTION_STEPS
     batch_size: int = DEFAULT_BATCH_SIZE
@@ -194,6 +282,8 @@ class TrainingRunConfig:
     torch_threads: int = DEFAULT_TORCH_THREADS
     torch_interop_threads: int = DEFAULT_TORCH_INTEROP_THREADS
     stochastic_eval: bool = False
+    write_step_trace_h5: bool = False
+    step_trace_every_n_steps: int = DEFAULT_STEP_TRACE_EVERY_N_STEPS
     preflight: bool = True
     preflight_only: bool = False
 
@@ -223,6 +313,9 @@ class TrainingRunConfig:
         _require_positive_int(
             self.lr_linear_end_steps, field_name="lr_linear_end_steps"
         )
+        _require_positive_int(
+            self.step_trace_every_n_steps, field_name="step_trace_every_n_steps"
+        )
 
 
 def build_doctor_config(
@@ -232,10 +325,9 @@ def build_doctor_config(
     tool_module: Optional[str] = None,
     tool_class: Optional[str] = None,
     reward_profile: RewardProfile = DEFAULT_REWARD_PROFILE,
-    force_penalty_factor: float = DEFAULT_FORCE_PENALTY_FACTOR,
-    force_threshold_N: float = DEFAULT_FORCE_THRESHOLD_N,
-    force_divisor: float = DEFAULT_FORCE_DIVISOR,
-    force_tip_only: bool = False,
+    force_alpha: float = DEFAULT_FORCE_ALPHA,
+    force_beta: float = DEFAULT_FORCE_BETA,
+    force_region: ForceRegion = DEFAULT_FORCE_REGION,
     resume_from: Optional[Path] = None,
     resume_replay_buffer_from: Optional[Path] = None,
     trainer_device: str = DEFAULT_POLICY_DEVICE,
@@ -256,10 +348,9 @@ def build_doctor_config(
         ),
         reward=RewardSpec(
             profile=reward_profile,
-            force_penalty_factor=force_penalty_factor,
-            force_threshold_N=force_threshold_N,
-            force_divisor=force_divisor,
-            force_tip_only=force_tip_only,
+            force_alpha=force_alpha,
+            force_beta=force_beta,
+            force_region=force_region,
         ),
         trainer_device=trainer_device,
         output_root=Path(output_root),
@@ -282,10 +373,9 @@ def build_training_config(
     tool_module: Optional[str] = None,
     tool_class: Optional[str] = None,
     reward_profile: RewardProfile = DEFAULT_REWARD_PROFILE,
-    force_penalty_factor: float = DEFAULT_FORCE_PENALTY_FACTOR,
-    force_threshold_N: float = DEFAULT_FORCE_THRESHOLD_N,
-    force_divisor: float = DEFAULT_FORCE_DIVISOR,
-    force_tip_only: bool = False,
+    force_alpha: float = DEFAULT_FORCE_ALPHA,
+    force_beta: float = DEFAULT_FORCE_BETA,
+    force_region: ForceRegion = DEFAULT_FORCE_REGION,
     trainer_device: str = DEFAULT_POLICY_DEVICE,
     worker_device: str = DEFAULT_WORKER_DEVICE,
     replay_device: str = DEFAULT_REPLAY_DEVICE,
@@ -294,8 +384,8 @@ def build_training_config(
     heatup_steps: int = DEFAULT_HEATUP_STEPS,
     training_steps: int = DEFAULT_TRAINING_STEPS,
     eval_every: int = DEFAULT_EVAL_EVERY,
-    eval_episodes: int = 1,
-    eval_seeds: Optional[Tuple[int, ...]] = None,
+    eval_episodes: Optional[int] = None,
+    eval_seeds: Tuple[int, ...] = ARCHVAR_EVAL_SEEDS,
     explore_episodes_between_updates: int = DEFAULT_EXPLORE_EPISODES_BETWEEN_UPDATES,
     consecutive_action_steps: int = DEFAULT_CONSECUTIVE_ACTION_STEPS,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -318,6 +408,8 @@ def build_training_config(
     preflight: bool = True,
     preflight_only: bool = False,
     stochastic_eval: bool = False,
+    write_step_trace_h5: bool = False,
+    step_trace_every_n_steps: int = DEFAULT_STEP_TRACE_EVERY_N_STEPS,
     target_branches: Sequence[str] = DEFAULT_TARGET_BRANCHES,
 ) -> TrainingRunConfig:
     """Assemble a validated training config from CLI-adjacent inputs."""
@@ -333,10 +425,9 @@ def build_training_config(
         ),
         reward=RewardSpec(
             profile=reward_profile,
-            force_penalty_factor=force_penalty_factor,
-            force_threshold_N=force_threshold_N,
-            force_divisor=force_divisor,
-            force_tip_only=force_tip_only,
+            force_alpha=force_alpha,
+            force_beta=force_beta,
+            force_region=force_region,
         ),
         trainer_device=trainer_device,
         worker_device=worker_device,
@@ -374,4 +465,6 @@ def build_training_config(
         preflight=preflight,
         preflight_only=preflight_only,
         stochastic_eval=stochastic_eval,
+        write_step_trace_h5=write_step_trace_h5,
+        step_trace_every_n_steps=step_trace_every_n_steps,
     )

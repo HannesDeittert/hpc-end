@@ -35,6 +35,8 @@ from steve_recommender.eval_v2.service import (
     LocalEvaluationRunner,
     _ParallelTrialTask,
     _ParallelTrialOutcome,
+    _trial_rows,
+    _write_trials_h5,
     _run_parallel_trial_tasks_process,
     pre_write_meshes_for_job,
 )
@@ -109,16 +111,14 @@ def _trial(
     steps_to_success: int | None,
     tip_speed_max_mm_s: float | None,
     force_available_for_score: bool,
-    wall_force_max: float | None = None,
-    wall_force_max_newton: float | None = None,
+    wire_force_normal_trial_max_N: float | None = None,
 ) -> TrialResult:
     from steve_recommender.eval_v2.models import ForceTelemetrySummary
 
     forces = ForceTelemetrySummary(
         available_for_score=force_available_for_score,
         validation_status="stub",
-        total_force_norm_max=wall_force_max,
-        total_force_norm_max_newton=wall_force_max_newton,
+        wire_force_normal_trial_max_N=wire_force_normal_trial_max_N,
     )
     return TrialResult(
         scenario_name=scenario_name,
@@ -376,19 +376,6 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
         policy = _policy("policy_a", execution_wire)
         candidate = _candidate("candidate_a", execution_wire, policy)
         scenario = _scenario("scenario_a")
-        job = EvaluationJob(
-            name="job_a",
-            scenarios=(scenario,),
-            candidates=(candidate,),
-            execution=ExecutionPlan(
-                trials_per_candidate=2,
-                base_seed=100,
-                policy_device="cpu",
-            ),
-            scoring=ScoringSpec(),
-            output_root=Path("/tmp/eval_outputs"),
-        )
-
         runtime_factory_calls: list[
             tuple[EvaluationCandidate, EvaluationScenario, str]
         ] = []
@@ -447,8 +434,7 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                     steps_to_success=4,
                     tip_speed_max_mm_s=20.0,
                     force_available_for_score=True,
-                    wall_force_max=0.4,
-                    wall_force_max_newton=0.2,
+                    wire_force_normal_trial_max_N=0.4,
                 )
             return _trial(
                 scenario_name="scenario_a",
@@ -463,47 +449,58 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                 steps_to_success=None,
                 tip_speed_max_mm_s=40.0,
                 force_available_for_score=False,
-                wall_force_max=None,
-                wall_force_max_newton=None,
             )
 
-        runner = LocalEvaluationRunner(
-            registry_path=Path("/tmp/wire_registry/index.json"),
-            runtime_factory=runtime_factory,
-            trial_runner=trial_runner,
-            generated_at_factory=lambda: "2026-04-20T12:00:00+00:00",
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            job = EvaluationJob(
+                name="job_a",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                execution=ExecutionPlan(
+                    trials_per_candidate=2,
+                    base_seed=100,
+                    policy_device="cpu",
+                ),
+                scoring=ScoringSpec(),
+                output_root=Path(tmp) / "eval_outputs",
+            )
 
-        report = runner.run_evaluation_job(job)
+            runner = LocalEvaluationRunner(
+                registry_path=Path("/tmp/wire_registry/index.json"),
+                runtime_factory=runtime_factory,
+                trial_runner=trial_runner,
+                generated_at_factory=lambda: "2026-04-20T12:00:00+00:00",
+            )
 
-        self.assertEqual(len(runtime_factory_calls), 1)
-        self.assertEqual(trial_runner_calls, [(0, 100), (1, 101)])
-        self.assertTrue(play_policy.closed)
-        self.assertTrue(intervention.closed)
+            report = runner.run_evaluation_job(job)
 
-        self.assertEqual(report.job_name, "job_a")
-        self.assertEqual(report.generated_at, "2026-04-20T12:00:00+00:00")
-        self.assertEqual(len(report.trials), 2)
-        self.assertEqual(report.artifacts.output_dir.parent, Path("/tmp/eval_outputs"))
-        self.assertTrue(report.artifacts.output_dir.name.startswith("job_a_"))
-        self.assertEqual(len(report.summaries), 1)
+            self.assertEqual(len(runtime_factory_calls), 1)
+            self.assertEqual(trial_runner_calls, [(0, 100), (1, 101)])
+            self.assertTrue(play_policy.closed)
+            self.assertTrue(intervention.closed)
 
-        summary = report.summaries[0]
-        self.assertIsInstance(summary, CandidateSummary)
-        self.assertEqual(summary.scenario_name, "scenario_a")
-        self.assertEqual(summary.candidate_name, "candidate_a")
-        self.assertEqual(summary.execution_wire, execution_wire)
-        self.assertEqual(summary.trained_on_wire, execution_wire)
-        self.assertEqual(summary.trial_count, 2)
-        self.assertAlmostEqual(summary.success_rate, 0.5)
-        self.assertAlmostEqual(summary.score_mean, 0.5)
-        self.assertAlmostEqual(summary.score_std, 0.35355339059)
-        self.assertAlmostEqual(summary.steps_total_mean, 5.5)
-        self.assertAlmostEqual(summary.steps_to_success_mean, 4.0)
-        self.assertAlmostEqual(summary.tip_speed_max_mean_mm_s, 30.0)
-        self.assertAlmostEqual(summary.wall_force_max_mean, 0.4)
-        self.assertAlmostEqual(summary.wall_force_max_mean_newton, 0.2)
-        self.assertAlmostEqual(summary.force_available_rate, 0.5)
+            self.assertEqual(report.job_name, "job_a")
+            self.assertEqual(report.generated_at, "2026-04-20T12:00:00+00:00")
+            self.assertEqual(len(report.trials), 2)
+            self.assertEqual(report.artifacts.output_dir.parent, Path(tmp) / "eval_outputs")
+            self.assertTrue(report.artifacts.output_dir.name.startswith("job_a_"))
+            self.assertEqual(len(report.summaries), 1)
+
+            summary = report.summaries[0]
+            self.assertIsInstance(summary, CandidateSummary)
+            self.assertEqual(summary.scenario_name, "scenario_a")
+            self.assertEqual(summary.candidate_name, "candidate_a")
+            self.assertEqual(summary.execution_wire, execution_wire)
+            self.assertEqual(summary.trained_on_wire, execution_wire)
+            self.assertEqual(summary.trial_count, 2)
+            self.assertAlmostEqual(summary.success_rate, 0.5)
+            self.assertAlmostEqual(summary.score_mean, 0.5)
+            self.assertAlmostEqual(summary.score_std, 0.35355339059)
+            self.assertAlmostEqual(summary.steps_total_mean, 5.5)
+            self.assertAlmostEqual(summary.steps_to_success_mean, 4.0)
+            self.assertAlmostEqual(summary.tip_speed_max_mean_mm_s, 30.0)
+            self.assertAlmostEqual(summary.wire_force_normal_trial_max_mean_N, 0.4)
+            self.assertAlmostEqual(summary.force_available_rate, 0.5)
 
     def test_run_evaluation_job_reuses_same_seed_schedule_for_all_candidates(
         self,
@@ -578,7 +575,8 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
                 steps_total=5,
                 steps_to_success=5,
                 tip_speed_max_mm_s=10.0,
-                force_available_for_score=False,
+                force_available_for_score=True,
+                wire_force_normal_trial_max_N=0.4,
             )
 
         runner = LocalEvaluationRunner(
@@ -675,6 +673,272 @@ class LocalEvaluationRunnerTests(unittest.TestCase):
 
         self.assertTrue(play_policy.closed)
         self.assertTrue(intervention.closed)
+
+    def test_run_evaluation_job_persists_completed_trials_before_failure(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            resume_dir = Path(tmp) / "resume_job"
+            job = EvaluationJob(
+                name="job_partial_persist",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                execution=ExecutionPlan(
+                    trials_per_candidate=2, base_seed=200, policy_device="cpu"
+                ),
+                output_root=Path(tmp) / "output_root",
+                resume_output_dir=resume_dir,
+            )
+            play_policy = _Closable()
+            intervention = _Closable()
+
+            def runtime_factory(
+                *,
+                candidate,
+                scenario,
+                simulation=None,
+                registry_path=None,
+                policy_device="cpu",
+            ):
+                _ = candidate, scenario, simulation, registry_path, policy_device
+                return _RuntimeStub(
+                    candidate=candidate,
+                    scenario=scenario,
+                    play_policy=play_policy,
+                    intervention=intervention,
+                )
+
+            def trial_runner(
+                *,
+                runtime,
+                trial_index,
+                seed,
+                execution,
+                scoring,
+                output_dir=None,
+                frame_callback=None,
+                progress_callback=None,
+            ):
+                _ = runtime, execution, scoring, output_dir, frame_callback, progress_callback
+                if trial_index == 0:
+                    return _trial(
+                        scenario_name="scenario_a",
+                        candidate_name="candidate_a",
+                        execution_wire=execution_wire,
+                        policy=policy,
+                        trial_index=trial_index,
+                        seed=seed,
+                        success=True,
+                        score_total=1.0,
+                        steps_total=5,
+                        steps_to_success=5,
+                        tip_speed_max_mm_s=10.0,
+                        force_available_for_score=True,
+                        wire_force_normal_trial_max_N=0.4,
+                    )
+                raise RuntimeError("walltime interruption")
+
+            runner = LocalEvaluationRunner(
+                runtime_factory=runtime_factory,
+                trial_runner=trial_runner,
+            )
+
+            with self.assertRaises(RuntimeError):
+                runner.run_evaluation_job(job)
+
+            persisted = runner._load_resume_trials_if_available(resume_dir)
+            self.assertEqual(len(persisted), 1)
+            self.assertEqual(persisted[0].trial_index, 0)
+            self.assertEqual(persisted[0].seed, 200)
+
+    def test_run_evaluation_job_resume_skips_completed_serial_trials(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            resume_dir = Path(tmp) / "resume_serial"
+            resume_dir.mkdir(parents=True)
+            completed_trial = _trial(
+                scenario_name="scenario_a",
+                candidate_name="candidate_a",
+                execution_wire=execution_wire,
+                policy=policy,
+                trial_index=0,
+                seed=100,
+                success=True,
+                score_total=0.75,
+                steps_total=4,
+                steps_to_success=4,
+                tip_speed_max_mm_s=20.0,
+                force_available_for_score=True,
+                wire_force_normal_trial_max_N=0.4,
+            )
+            _write_trials_h5(
+                resume_dir / "trials.h5",
+                _trial_rows(
+                    (completed_trial,),
+                    max_episode_steps=450,
+                    tip_length_mm=5.0,
+                ),
+            )
+
+            job = EvaluationJob(
+                name="job_resume_serial",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                execution=ExecutionPlan(
+                    trials_per_candidate=2, base_seed=100, policy_device="cpu"
+                ),
+                output_root=Path(tmp) / "output_root",
+                resume_output_dir=resume_dir,
+            )
+
+            play_policy = _Closable()
+            intervention = _Closable()
+            trial_runner_calls: list[tuple[int, int]] = []
+
+            def runtime_factory(
+                *,
+                candidate,
+                scenario,
+                simulation=None,
+                registry_path=None,
+                policy_device="cpu",
+            ):
+                _ = candidate, scenario, simulation, registry_path, policy_device
+                return _RuntimeStub(
+                    candidate=candidate,
+                    scenario=scenario,
+                    play_policy=play_policy,
+                    intervention=intervention,
+                )
+
+            def trial_runner(
+                *,
+                runtime,
+                trial_index,
+                seed,
+                execution,
+                scoring,
+                output_dir=None,
+                frame_callback=None,
+                progress_callback=None,
+            ):
+                _ = runtime, execution, scoring, output_dir, frame_callback, progress_callback
+                trial_runner_calls.append((trial_index, seed))
+                return _trial(
+                    scenario_name="scenario_a",
+                    candidate_name="candidate_a",
+                    execution_wire=execution_wire,
+                    policy=policy,
+                    trial_index=trial_index,
+                    seed=seed,
+                    success=False,
+                    score_total=0.25,
+                    steps_total=7,
+                    steps_to_success=None,
+                    tip_speed_max_mm_s=40.0,
+                    force_available_for_score=True,
+                    wire_force_normal_trial_max_N=0.6,
+                )
+
+            runner = LocalEvaluationRunner(
+                runtime_factory=runtime_factory,
+                trial_runner=trial_runner,
+            )
+            report = runner.run_evaluation_job(job)
+
+            self.assertEqual(trial_runner_calls, [(1, 101)])
+            self.assertEqual(report.artifacts.output_dir, resume_dir)
+            self.assertEqual([trial.trial_index for trial in report.trials], [0, 1])
+
+    def test_run_evaluation_job_resume_skips_completed_parallel_trials(self) -> None:
+        execution_wire = _wire("steve_default", "standard_j")
+        policy = _policy("policy_a", execution_wire)
+        candidate = _candidate("candidate_a", execution_wire, policy)
+        scenario = _scenario("scenario_a")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            resume_dir = Path(tmp) / "resume_parallel"
+            resume_dir.mkdir(parents=True)
+            completed_trial = _trial(
+                scenario_name="scenario_a",
+                candidate_name="candidate_a",
+                execution_wire=execution_wire,
+                policy=policy,
+                trial_index=0,
+                seed=400,
+                success=True,
+                score_total=1.0,
+                steps_total=5,
+                steps_to_success=5,
+                tip_speed_max_mm_s=10.0,
+                force_available_for_score=True,
+                wire_force_normal_trial_max_N=0.4,
+            )
+            _write_trials_h5(
+                resume_dir / "trials.h5",
+                _trial_rows(
+                    (completed_trial,),
+                    max_episode_steps=450,
+                    tip_length_mm=5.0,
+                ),
+            )
+            job = EvaluationJob(
+                name="job_resume_parallel",
+                scenarios=(scenario,),
+                candidates=(candidate,),
+                execution=ExecutionPlan(
+                    trials_per_candidate=3,
+                    base_seed=400,
+                    policy_device="cpu",
+                    worker_count=2,
+                ),
+                output_root=Path(tmp) / "output_root",
+                resume_output_dir=resume_dir,
+            )
+
+            seen_trial_indices: list[int] = []
+
+            def parallel_task_runner(tasks, *, worker_count, progress_callback=None):
+                _ = worker_count, progress_callback
+                outcomes = []
+                for task in tasks:
+                    seen_trial_indices.append(task.trial_index)
+                    outcomes.append(
+                        _ParallelTrialOutcome(
+                            scenario_index=task.scenario_index,
+                            candidate_index=task.candidate_index,
+                            trial_index=task.trial_index,
+                            trial=_trial(
+                                scenario_name=task.scenario.name,
+                                candidate_name=task.candidate.name,
+                                execution_wire=task.candidate.execution_wire,
+                                policy=task.candidate.policy,
+                                trial_index=task.trial_index,
+                                seed=task.seed,
+                                policy_seed=task.policy_seed,
+                                success=True,
+                                score_total=float(task.trial_index + 1),
+                                steps_total=task.trial_index + 5,
+                                steps_to_success=task.trial_index + 5,
+                                tip_speed_max_mm_s=10.0,
+                                force_available_for_score=False,
+                            ),
+                        )
+                    )
+                return tuple(outcomes)
+
+            runner = LocalEvaluationRunner(parallel_task_runner=parallel_task_runner)
+            report = runner.run_evaluation_job(job)
+
+            self.assertEqual(seen_trial_indices, [1, 2])
+            self.assertEqual([trial.trial_index for trial in report.trials], [0, 1, 2])
 
     def test_run_evaluation_job_forwards_frame_and_progress_callbacks_to_trial_runner(
         self,
@@ -1212,8 +1476,6 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                     steps_total_mean=3.0,
                     steps_to_success_mean=1.0,
                     tip_speed_max_mean_mm_s=12.5,
-                    wall_force_max_mean=None,
-                    wall_force_max_mean_newton=None,
                     force_available_rate=0.0,
                 ),
             ),
@@ -1302,8 +1564,6 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                     steps_total_mean=3.0,
                     steps_to_success_mean=2.0,
                     tip_speed_max_mean_mm_s=15.0,
-                    wall_force_max_mean=0.2,
-                    wall_force_max_mean_newton=0.1,
                     force_available_rate=1.0,
                 ),
             ),
@@ -1373,8 +1633,6 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                     steps_total_mean=3.0,
                     steps_to_success_mean=2.0,
                     tip_speed_max_mean_mm_s=15.0,
-                    wall_force_max_mean=0.2,
-                    wall_force_max_mean_newton=0.1,
                     force_available_rate=1.0,
                 ),
             ),
@@ -1409,9 +1667,7 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
                                 {"wire_collision_dof": 2, "is_tip": True},
                             ),
                             tip_force_total_vector_N=(0.1, 0.2, 0.3),
-                            tip_force_total_norm_N=0.3741657387,
-                            tip_force_peak_normal_N=0.2,
-                            tip_force_total_mean_N=0.1,
+                            wire_force_normal_trial_max_N=0.5,
                         ),
                     ),
                     valid_for_ranking=True,
@@ -1460,7 +1716,7 @@ class DefaultEvaluationServiceTests(unittest.TestCase):
         assert loaded.trials[0].telemetry.forces is not None
         self.assertTrue(loaded.trials[0].telemetry.forces.available_for_score)
         self.assertAlmostEqual(
-            loaded.trials[0].telemetry.forces.tip_force_peak_normal_N, 0.2
+            loaded.trials[0].telemetry.forces.wire_force_normal_trial_max_N, 0.5
         )
 
     def test_save_clinical_feedback_writes_feedback_json_next_to_report(self) -> None:

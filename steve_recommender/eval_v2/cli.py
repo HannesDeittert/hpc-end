@@ -133,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Build and execute one eval_v2 job")
     run_parser.add_argument("--job-name", default="eval_v2_job")
+    run_parser.add_argument(
+        "--resume-output-dir",
+        default=None,
+        help="Resume an interrupted eval_v2 job from an existing output directory.",
+    )
     run_parser.add_argument("--scenario-name", default="scenario")
     run_parser.add_argument("--candidate-label", default=None)
     run_parser.add_argument(
@@ -684,6 +689,9 @@ def _handle_run(
             ),
         ),
         output_root=Path(args.output_root),
+        resume_output_dir=(
+            None if args.resume_output_dir is None else Path(args.resume_output_dir)
+        ),
     )
     report = service.run_evaluation_job(job)
     _write(

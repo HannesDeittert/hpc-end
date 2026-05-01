@@ -73,8 +73,6 @@ class _ServiceStub:
                     steps_total_mean=5.0,
                     steps_to_success_mean=4.0,
                     tip_speed_max_mean_mm_s=20.0,
-                    wall_force_max_mean=None,
-                    wall_force_max_mean_newton=None,
                     force_available_rate=0.0,
                 ),
             ),
@@ -224,6 +222,8 @@ class CliAdapterTests(unittest.TestCase):
                 "run",
                 "--job-name",
                 "job_x",
+                "--resume-output-dir",
+                "/tmp/eval_resume_job",
                 "--scenario-name",
                 "scenario_x",
                 "--anatomy",
@@ -272,6 +272,7 @@ class CliAdapterTests(unittest.TestCase):
         job = service.jobs[0]
         self.assertEqual(job.name, "job_x")
         self.assertEqual(job.output_root, Path("/tmp/eval_runs"))
+        self.assertEqual(job.resume_output_dir, Path("/tmp/eval_resume_job"))
         self.assertEqual(job.execution.trials_per_candidate, 3)
         self.assertEqual(job.execution.base_seed, 500)
         self.assertEqual(job.execution.max_episode_steps, 75)

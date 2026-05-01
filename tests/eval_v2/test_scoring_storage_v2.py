@@ -77,12 +77,20 @@ def _trial(
     forces = ForceTelemetrySummary(
         available_for_score=force_available,
         validation_status="ok" if force_available else "missing",
-        total_force_norm_max_newton=force_max_N,
-        total_force_norm_mean_newton=force_max_N,
+        wire_force_magnitude_instant_N=force_max_N,
+        wire_force_magnitude_trial_max_N=force_max_N,
+        wire_force_magnitude_trial_mean_N=force_max_N,
+        wire_force_normal_instant_N=force_max_N,
+        wire_force_normal_trial_max_N=force_max_N,
+        wire_force_normal_trial_mean_N=force_max_N,
+        tip_force_magnitude_instant_N=0.4 if force_available else 0.0,
+        tip_force_magnitude_trial_max_N=0.4 if force_available else 0.0,
+        tip_force_magnitude_trial_mean_N=0.2 if force_available else 0.0,
+        tip_force_normal_instant_N=0.4 if force_available else 0.0,
+        tip_force_normal_trial_max_N=0.4 if force_available else 0.0,
+        tip_force_normal_trial_mean_N=0.2 if force_available else 0.0,
         total_force_norm_max=force_max_N,
         total_force_norm_mean=force_max_N,
-        tip_force_peak_normal_N=0.4 if force_available else None,
-        tip_force_total_mean_N=0.2 if force_available else None,
     )
     return TrialResult(
         scenario_name="scenario_a",
@@ -173,7 +181,7 @@ class ScoringFormulaTests(unittest.TestCase):
             forces=ForceTelemetrySummary(
                 available_for_score=True,
                 validation_status="ok",
-                total_force_norm_max_newton=1.9,
+                wire_force_normal_trial_max_N=1.9,
             ),
         )
         self.assertTrue(force_within_safety_threshold(telemetry=telemetry, scoring=scoring))
@@ -187,11 +195,31 @@ class ScoringFormulaTests(unittest.TestCase):
             forces=ForceTelemetrySummary(
                 available_for_score=True,
                 validation_status="ok",
-                total_force_norm_max_newton=2.1,
+                wire_force_normal_trial_max_N=2.1,
             ),
         )
         self.assertFalse(force_within_safety_threshold(telemetry=telemetry_fail, scoring=scoring))
         self.assertFalse(valid_for_ranking(telemetry=telemetry_fail, max_episode_steps=10, scoring=scoring))
+
+    def test_scoring_uses_wire_force_normal_trial_max_not_legacy_total_force_field(self) -> None:
+        scoring = ScoringSpec(force=ForceScoringSpec(force_max_N=2.0))
+        telemetry = TrialTelemetrySummary(
+            success=True,
+            steps_total=10,
+            steps_to_success=8,
+            episode_reward=1.0,
+            forces=ForceTelemetrySummary(
+                available_for_score=True,
+                validation_status="ok",
+                wire_force_normal_trial_max_N=1.9,
+                total_force_norm_max=9.9,
+            ),
+        )
+        self.assertTrue(force_within_safety_threshold(telemetry=telemetry, scoring=scoring))
+        breakdown = valid_for_ranking(
+            telemetry=telemetry, max_episode_steps=10, scoring=scoring
+        )
+        self.assertTrue(breakdown)
 
     def test_candidate_score_aggregation_uses_valid_rate_and_valid_trial_soft_scores(self) -> None:
         scoring = ScoringSpec(
@@ -211,6 +239,29 @@ class ScoringFormulaTests(unittest.TestCase):
         self.assertAlmostEqual(summary.valid_rate, 2.0 / 3.0)
         self.assertAlmostEqual(summary.soft_score_mean_valid, 0.625)
         self.assertAlmostEqual(summary.candidate_score_final, (2.0 / 3.0) * 0.625)
+
+    def test_candidate_summary_aggregates_wire_force_normal_trial_max_mean(self) -> None:
+        scoring = ScoringSpec()
+        first = _trial(
+            success=True,
+            steps_to_success=5,
+            force_max_N=0.8,
+            force_available=True,
+            total_score=0.8,
+            valid=True,
+            force_within_threshold=True,
+        )
+        second = _trial(
+            success=True,
+            steps_to_success=6,
+            force_max_N=1.4,
+            force_available=True,
+            total_score=0.6,
+            valid=True,
+            force_within_threshold=True,
+        )
+        summary = summarize_trials((first, second), scoring=scoring)
+        self.assertAlmostEqual(summary.wire_force_normal_trial_max_mean_N, 1.1)
 
 
 class ManifestAndTrialsPersistenceTests(unittest.TestCase):
@@ -238,10 +289,11 @@ class ManifestAndTrialsPersistenceTests(unittest.TestCase):
             force_within_threshold=True,
             smoothness=None,
         )
+        summary = summarize_trials((trial,), scoring=scoring)
         report = EvaluationReport(
             job_name="manifest_job",
             generated_at="2026-04-30T20:00:00+00:00",
-            summaries=(),
+            summaries=(summary,),
             trials=(trial,),
             artifacts=EvaluationArtifacts(output_dir=Path("/tmp/manifest_job")),
         )
@@ -275,14 +327,20 @@ class ManifestAndTrialsPersistenceTests(unittest.TestCase):
 
             manifest = json.loads(artifacts.manifest_json_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["schema_version"], 1)
+            self.assertEqual(manifest["metric_version"], "v2_normal_component")
             self.assertEqual(manifest["scoring_spec"]["force"]["tip_length_mm"], 7.5)
             self.assertEqual(manifest["scoring_spec"]["force"]["force_max_N"], 1.7)
             self.assertEqual(manifest["scoring_spec"]["candidate_score"]["default_weights"]["score_safety"], 0.5)
             self.assertEqual(manifest["counts"]["n_trials_total"], 1)
+            self.assertEqual(
+                manifest["summaries"][0]["wire_force_normal_trial_max_mean_N"], 1.2
+            )
 
             with h5py.File(artifacts.trials_h5_path, "r") as handle:
+                self.assertEqual(handle.attrs["metric_version"], "v2_normal_component")
                 trials_group = handle["trials"]
                 required_columns = {
+                    "metric_version",
                     "scenario_name",
                     "candidate_name",
                     "execution_wire",
@@ -295,6 +353,7 @@ class ManifestAndTrialsPersistenceTests(unittest.TestCase):
                     "force_within_safety_threshold",
                     "steps_total",
                     "steps_to_success",
+                    "end_reason",
                     "max_episode_steps",
                     "episode_reward",
                     "sim_time_s",
@@ -303,10 +362,18 @@ class ManifestAndTrialsPersistenceTests(unittest.TestCase):
                     "tip_speed_mean_mm_s",
                     "tip_total_distance_mm",
                     "force_available_for_score",
-                    "force_total_norm_max_N",
-                    "force_total_norm_mean_N",
-                    "tip_force_peak_normal_N",
-                    "tip_force_total_mean_N",
+                    "wire_force_magnitude_instant_N",
+                    "wire_force_magnitude_trial_max_N",
+                    "wire_force_magnitude_trial_mean_N",
+                    "wire_force_normal_instant_N",
+                    "wire_force_normal_trial_max_N",
+                    "wire_force_normal_trial_mean_N",
+                    "tip_force_magnitude_instant_N",
+                    "tip_force_magnitude_trial_max_N",
+                    "tip_force_magnitude_trial_mean_N",
+                    "tip_force_normal_instant_N",
+                    "tip_force_normal_trial_max_N",
+                    "tip_force_normal_trial_mean_N",
                     "tip_length_mm",
                     "tip_acc_p95",
                     "tip_acc_max",
@@ -320,7 +387,17 @@ class ManifestAndTrialsPersistenceTests(unittest.TestCase):
                     "trace_h5_path",
                 }
                 self.assertTrue(required_columns.issubset(set(trials_group.keys())))
+                self.assertEqual(
+                    trials_group["metric_version"][0].decode("utf-8"),
+                    "v2_normal_component",
+                )
                 self.assertAlmostEqual(float(trials_group["tip_length_mm"][0]), 7.5)
+                self.assertAlmostEqual(
+                    float(trials_group["wire_force_normal_instant_N"][0]), 1.2
+                )
+                self.assertAlmostEqual(
+                    float(trials_group["wire_force_normal_trial_max_N"][0]), 1.2
+                )
                 self.assertTrue(bool(trials_group["force_within_safety_threshold"][0]))
                 self.assertTrue(bool(trials_group["valid_for_ranking"][0]))
 

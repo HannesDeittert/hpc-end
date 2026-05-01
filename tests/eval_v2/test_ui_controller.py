@@ -134,8 +134,6 @@ def _make_report(job_name: str = "job_x") -> EvaluationReport:
                 steps_total_mean=5.0,
                 steps_to_success_mean=3.0,
                 tip_speed_max_mean_mm_s=12.5,
-                wall_force_max_mean=None,
-                wall_force_max_mean_newton=None,
                 force_available_rate=0.0,
             ),
         ),

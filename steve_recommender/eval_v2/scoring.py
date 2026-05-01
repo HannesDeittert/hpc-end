@@ -65,8 +65,10 @@ def score_safety(*, force_N: float | None, scoring: ScoringSpec) -> float:
 
 def score_smoothness(*, tip_jerk_p95: float | None, jerk_scale_mm_s3: float | None) -> float | None:
     jerk_scale = _finite_or_none(jerk_scale_mm_s3)
+    if jerk_scale is None:
+        return 1.0
     jerk_value = _finite_or_none(tip_jerk_p95)
-    if jerk_scale is None or jerk_value is None:
+    if jerk_value is None:
         return None
     return _clip01(math.exp(-max(jerk_value, 0.0) / jerk_scale))
 
@@ -76,8 +78,9 @@ def force_within_safety_threshold(*, telemetry: TrialTelemetrySummary, scoring: 
     return bool(
         forces is not None
         and forces.available_for_score
-        and forces.total_force_norm_max_newton is not None
-        and float(forces.total_force_norm_max_newton) <= float(scoring.force.force_max_N)
+        and forces.wire_force_normal_trial_max_N is not None
+        and float(forces.wire_force_normal_trial_max_N)
+        <= float(scoring.force.force_max_N)
     )
 
 
@@ -107,7 +110,7 @@ def soft_score_total(*, breakdown: ScoreBreakdown, scoring: ScoringSpec) -> floa
     components = {
         "score_success": float(breakdown.success),
         "score_efficiency": float(breakdown.efficiency),
-        "score_safety": float(breakdown.safety),
+        "score_safety": float("nan") if breakdown.safety is None else float(breakdown.safety),
         "score_smoothness": float("nan") if breakdown.smoothness is None else float(breakdown.smoothness),
     }
     weighted_sum = 0.0
@@ -141,11 +144,11 @@ def score_trial(
     forces = telemetry.forces
     if forces is not None and forces.available_for_score:
         safety = score_safety(
-            force_N=forces.total_force_norm_max_newton,
+            force_N=forces.wire_force_normal_trial_max_N,
             scoring=scoring,
         )
     else:
-        safety = 0.0
+        safety = None
     smoothness = score_smoothness(
         tip_jerk_p95=telemetry.tip_jerk_p95,
         jerk_scale_mm_s3=scoring.smoothness_score.jerk_scale_mm_s3,
@@ -154,7 +157,7 @@ def score_trial(
         total=0.0,
         success=float(success_score),
         efficiency=float(efficiency),
-        safety=float(safety),
+        safety=None if safety is None else float(safety),
         smoothness=smoothness,
     )
     return ScoreBreakdown(
@@ -197,9 +200,7 @@ def calculate_overall_score(
         insertion_time=insertion_time,
         max_expected_time=max_expected_time,
     )
-    force_value = summary.wall_force_max_mean_newton
-    if force_value is None:
-        force_value = summary.wall_force_max_mean
+    force_value = summary.wire_force_normal_trial_max_mean_N
     safety_score_value = normalize_safety_score(
         max_force=force_value,
         safe_force_threshold=safe_force_threshold,

@@ -8,13 +8,13 @@ def test_doctor_parser_builds_config():
             "doctor",
             "--tool",
             "steve_default/standard_j",
-            "--force-penalty-factor",
+            "--force-alpha",
             "0.1",
             "--reward-profile",
-            "default_plus_force_penalty",
+            "default_plus_normal_force_penalty",
         ]
     )
     cfg = build_doctor_config_from_args(args)
     assert cfg.runtime.anatomy_id is None
     assert cfg.runtime.tool_ref == "steve_default/standard_j"
-    assert cfg.reward.force_penalty_factor == 0.1
+    assert cfg.reward.force_alpha == 0.1

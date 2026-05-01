@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from steve_recommender.train_v2.cli import build_parser, build_training_config_from_args
+from steve_recommender.train_v2.config import ARCHVAR_EVAL_SEEDS
 
 
 def test_train_parser_builds_preflight_only_config():
@@ -24,9 +27,10 @@ def test_train_parser_builds_preflight_only_config():
     assert cfg.preflight_only is True
     assert cfg.preflight is True
     assert cfg.resume_from == Path("/tmp/checkpoint.everl")
+    assert cfg.eval_episodes is None
 
 
-def test_train_parser_supports_force_reward_flags():
+def test_train_parser_supports_normal_force_reward_flags():
     parser = build_parser()
     args = parser.parse_args(
         [
@@ -36,45 +40,59 @@ def test_train_parser_supports_force_reward_flags():
             "--tool",
             "steve_default/standard_j",
             "--reward-profile",
-            "default_plus_force_penalty",
-            "--force-penalty-factor",
+            "default_plus_normal_force_penalty",
+            "--force-alpha",
             "0.25",
-            "--force-tip-only",
+            "--force-beta",
+            "1.5",
+            "--force-region",
+            "tip_only",
         ]
     )
 
     cfg = build_training_config_from_args(args)
 
-    assert cfg.reward.profile == "default_plus_force_penalty"
-    assert cfg.reward.force_penalty_factor == 0.25
-    assert cfg.reward.force_tip_only is True
+    assert cfg.reward.profile == "default_plus_normal_force_penalty"
+    assert cfg.reward.force_alpha == 0.25
+    assert cfg.reward.force_beta == 1.5
+    assert cfg.reward.force_region == "tip_only"
 
 
-def test_train_parser_supports_excess_force_reward_flags():
+def test_train_parser_supports_step_trace_h5_flags():
     parser = build_parser()
     args = parser.parse_args(
         [
             "train",
             "--name",
-            "excess-force",
+            "trace",
             "--tool",
             "steve_default/standard_j",
-            "--reward-profile",
-            "default_plus_excess_force_penalty",
-            "--force-threshold",
-            "0.9",
-            "--force-divisor",
-            "1500",
-            "--force-tip-only",
+            "--write-step-trace-h5",
+            "--step-trace-every-n-steps",
+            "7",
         ]
     )
 
     cfg = build_training_config_from_args(args)
 
-    assert cfg.reward.profile == "default_plus_excess_force_penalty"
-    assert cfg.reward.force_threshold_N == 0.9
-    assert cfg.reward.force_divisor == 1500.0
-    assert cfg.reward.force_tip_only is True
+    assert cfg.write_step_trace_h5 is True
+    assert cfg.step_trace_every_n_steps == 7
+
+
+def test_train_parser_rejects_removed_force_flags():
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "train",
+                "--name",
+                "legacy-force",
+                "--tool",
+                "steve_default/standard_j",
+                "--force-threshold",
+                "0.9",
+            ]
+        )
 
 
 def test_train_parser_supports_custom_tool_module_and_class():
@@ -100,3 +118,21 @@ def test_train_parser_supports_custom_tool_module_and_class():
         == "steve_recommender.bench.custom_tools_amplatz_gentle_simple"
     )
     assert cfg.runtime.tool_class == "JShapedAmplatzSuperStiffGentleSimple"
+
+
+def test_train_parser_uses_archvar_eval_seed_schedule_by_default():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "train",
+            "--name",
+            "default-seeds",
+            "--tool",
+            "steve_default/standard_j",
+        ]
+    )
+
+    cfg = build_training_config_from_args(args)
+
+    assert cfg.eval_seeds == ARCHVAR_EVAL_SEEDS
+    assert cfg.eval_episodes is None

@@ -123,8 +123,8 @@ class _ResettableComponent:
 
 
 class _TraceCollectorStub:
-    def __init__(self, *, spec, action_dt_s) -> None:
-        _ = spec, action_dt_s
+    def __init__(self, *, spec, action_dt_s, **kwargs) -> None:
+        _ = spec, action_dt_s, kwargs
         self._wire_force_records = []
         self._triangle_force_records = []
 
@@ -370,6 +370,7 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertTrue(result.telemetry.success)
         self.assertEqual(result.telemetry.steps_total, 1)
         self.assertEqual(result.telemetry.steps_to_success, 1)
+        self.assertEqual(result.telemetry.end_reason, "target_reached")
         self.assertGreater(result.telemetry.episode_reward, 0.0)
         self.assertEqual(result.telemetry.tip_speed_max_mm_s, 0.0)
         self.assertEqual(result.telemetry.tip_speed_mean_mm_s, 0.0)
@@ -421,6 +422,7 @@ class SingleTrialRunnerIntegrationTests(unittest.TestCase):
         self.assertFalse(result.telemetry.success)
         self.assertEqual(result.telemetry.steps_total, 1)
         self.assertIsNone(result.telemetry.steps_to_success)
+        self.assertEqual(result.telemetry.end_reason, "vessel_end")
         self.assertLess(result.telemetry.episode_reward, 0.0)
         self.assertAlmostEqual(result.score.success, 0.0)
         self.assertAlmostEqual(result.score.efficiency, 0.0)

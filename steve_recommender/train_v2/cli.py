@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .config import (
+    ARCHVAR_EVAL_SEEDS,
     DEFAULT_BATCH_SIZE,
     DEFAULT_CONSECUTIVE_ACTION_STEPS,
     DEFAULT_EMBEDDER_LAYERS,
@@ -54,14 +55,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REWARD_PROFILE,
         choices=(
             "default",
-            "default_plus_force_penalty",
-            "default_plus_excess_force_penalty",
+            "default_plus_normal_force_penalty",
         ),
     )
-    train_parser.add_argument("--force-penalty-factor", type=float, default=0.0)
-    train_parser.add_argument("--force-threshold", type=float, default=0.85)
-    train_parser.add_argument("--force-divisor", type=float, default=1000.0)
-    train_parser.add_argument("--force-tip-only", action="store_true")
+    train_parser.add_argument("--force-alpha", type=float, default=0.1)
+    train_parser.add_argument("--force-beta", type=float, default=1.0)
+    train_parser.add_argument(
+        "--force-region",
+        choices=("whole_wire", "tip_only"),
+        default="whole_wire",
+    )
     train_parser.add_argument("--trainer-device", default="cpu")
     train_parser.add_argument("--worker-device", default="cpu")
     train_parser.add_argument("--replay-device", default="cpu")
@@ -72,7 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--training-steps", type=int, default=DEFAULT_TRAINING_STEPS
     )
     train_parser.add_argument("--eval-every", type=int, default=DEFAULT_EVAL_EVERY)
-    train_parser.add_argument("--eval-episodes", type=int, default=1)
+    train_parser.add_argument(
+        "--eval-episodes",
+        type=int,
+        default=None,
+        help="Episodes per evaluation; omit to consume the full eval seed list.",
+    )
     train_parser.add_argument(
         "--explore-episodes-between-updates",
         type=int,
@@ -135,8 +143,20 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--resume-replay-buffer-from", type=Path, default=None)
     train_parser.add_argument("--train-max-steps", type=int, default=None)
     train_parser.add_argument("--eval-max-steps", type=int, default=None)
-    train_parser.add_argument("--eval-seeds", type=str, default="none")
+    train_parser.add_argument(
+        "--eval-seeds",
+        type=str,
+        default=None,
+        help="Comma-separated integer seeds for deterministic eval; defaults to the ArchVar schedule.",
+    )
     train_parser.add_argument("--stochastic-eval", action="store_true")
+    train_parser.add_argument("--write-step-trace-h5", action="store_true")
+    train_parser.add_argument(
+        "--step-trace-every-n-steps",
+        type=int,
+        default=10,
+        help="Sample one per-step debug HDF5 row every N steps, plus every terminal step.",
+    )
     train_parser.add_argument("--no-preflight", action="store_true")
     train_parser.add_argument("--preflight-only", action="store_true")
 
@@ -153,14 +173,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REWARD_PROFILE,
         choices=(
             "default",
-            "default_plus_force_penalty",
-            "default_plus_excess_force_penalty",
+            "default_plus_normal_force_penalty",
         ),
     )
-    doctor_parser.add_argument("--force-penalty-factor", type=float, default=0.0)
-    doctor_parser.add_argument("--force-threshold", type=float, default=0.85)
-    doctor_parser.add_argument("--force-divisor", type=float, default=1000.0)
-    doctor_parser.add_argument("--force-tip-only", action="store_true")
+    doctor_parser.add_argument("--force-alpha", type=float, default=0.1)
+    doctor_parser.add_argument("--force-beta", type=float, default=1.0)
+    doctor_parser.add_argument(
+        "--force-region",
+        choices=("whole_wire", "tip_only"),
+        default="whole_wire",
+    )
     doctor_parser.add_argument("--resume-from", type=Path, default=None)
     doctor_parser.add_argument("--resume-replay-buffer-from", type=Path, default=None)
     doctor_parser.add_argument("--trainer-device", default="cpu")
@@ -179,10 +201,9 @@ def build_doctor_config_from_args(args: argparse.Namespace) -> DoctorConfig:
         tool_module=args.tool_module,
         tool_class=args.tool_class,
         reward_profile=args.reward_profile,
-        force_penalty_factor=args.force_penalty_factor,
-        force_threshold_N=args.force_threshold,
-        force_divisor=args.force_divisor,
-        force_tip_only=args.force_tip_only,
+        force_alpha=args.force_alpha,
+        force_beta=args.force_beta,
+        force_region=args.force_region,
         resume_from=args.resume_from,
         resume_replay_buffer_from=args.resume_replay_buffer_from,
         trainer_device=args.trainer_device,
@@ -202,10 +223,9 @@ def build_training_config_from_args(args: argparse.Namespace):
         tool_module=args.tool_module,
         tool_class=args.tool_class,
         reward_profile=args.reward_profile,
-        force_penalty_factor=args.force_penalty_factor,
-        force_threshold_N=args.force_threshold,
-        force_divisor=args.force_divisor,
-        force_tip_only=args.force_tip_only,
+        force_alpha=args.force_alpha,
+        force_beta=args.force_beta,
+        force_region=args.force_region,
         trainer_device=args.trainer_device,
         worker_device=args.worker_device,
         replay_device=args.replay_device,
@@ -216,8 +236,8 @@ def build_training_config_from_args(args: argparse.Namespace):
         eval_every=args.eval_every,
         eval_episodes=args.eval_episodes,
         eval_seeds=(
-            None
-            if args.eval_seeds == "none"
+            ARCHVAR_EVAL_SEEDS
+            if args.eval_seeds is None or args.eval_seeds == "none"
             else tuple(int(v) for v in args.eval_seeds.split(",") if v.strip())
         ),
         explore_episodes_between_updates=args.explore_episodes_between_updates,
@@ -242,6 +262,8 @@ def build_training_config_from_args(args: argparse.Namespace):
         preflight=not args.no_preflight,
         preflight_only=args.preflight_only,
         stochastic_eval=args.stochastic_eval,
+        write_step_trace_h5=args.write_step_trace_h5,
+        step_trace_every_n_steps=args.step_trace_every_n_steps,
     )
 
 

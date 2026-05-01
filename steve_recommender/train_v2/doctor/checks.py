@@ -158,7 +158,7 @@ def check_resume_paths(cfg: DoctorConfig) -> List[CheckResult]:
 def check_force_reward_prereqs(cfg: DoctorConfig) -> List[CheckResult]:
     """Verify force-reward specific prerequisites."""
 
-    if cfg.reward.profile != "default_plus_force_penalty":
+    if cfg.reward.profile != "default_plus_normal_force_penalty":
         return []
     if not MONITOR_PLUGIN_PATH.exists():
         return [

@@ -59,8 +59,7 @@ def _trial(
             forces=ForceTelemetrySummary(
                 available_for_score=True,
                 validation_status="ok",
-                total_force_norm_max_newton=force_max_N,
-                total_force_norm_mean_newton=force_max_N,
+                wire_force_normal_trial_max_N=force_max_N,
                 total_force_norm_max=force_max_N,
                 total_force_norm_mean=force_max_N,
             ),
@@ -90,8 +89,6 @@ def _empty_summary_for_wire(wire: WireRef, candidate_name: str):
         steps_total_mean=1.0,
         steps_to_success_mean=1.0,
         tip_speed_max_mean_mm_s=0.0,
-        wall_force_max_mean=0.0,
-        wall_force_max_mean_newton=0.0,
         force_available_rate=1.0,
     )
 

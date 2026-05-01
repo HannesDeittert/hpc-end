@@ -528,14 +528,14 @@ class TrialIndicatorSpec:
 class ForceScoringSpec:
     """Force source selection and hard-threshold configuration."""
 
-    default_safety_force_source: str = "force_total_norm_max_N"
+    default_safety_force_source: str = "wire_force_normal_trial_max_N"
     force_max_N: float = 2.0
     tip_length_mm: float = field(default_factory=_default_tip_threshold_mm)
     tip_force_definition: str = (
         "maximum compressive normal contact force within distal tip region"
     )
     whole_wire_force_definition: str = (
-        "maximum contact force norm along the entire guidewire during the trial"
+        "maximum surface-normal contact force component along the entire guidewire during the trial"
     )
 
     def __post_init__(self) -> None:
@@ -584,11 +584,18 @@ class CandidateScoreSpec:
     beta: float = 0.0
     default_weights: dict[str, float] = field(
         default_factory=lambda: {
-            "score_safety": 0.5,
-            "score_efficiency": 0.5,
+            "score_success": 1.5,
+            "score_efficiency": 1.5,
+            "score_safety": 1.0,
+            "score_smoothness": 0.25,
         }
     )
-    active_components: Tuple[str, ...] = ("score_safety", "score_efficiency")
+    active_components: Tuple[str, ...] = (
+        "score_success",
+        "score_efficiency",
+        "score_safety",
+        "score_smoothness",
+    )
 
     def __post_init__(self) -> None:
         _require_non_negative(self.lambda_, field_name="lambda_")
@@ -665,6 +672,7 @@ class EvaluationJob:
     execution: ExecutionPlan = field(default_factory=ExecutionPlan)
     scoring: ScoringSpec = field(default_factory=ScoringSpec)
     output_root: Path = Path("results/eval_runs")
+    resume_output_dir: Optional[Path] = None
 
     def __post_init__(self) -> None:
         _require_non_empty(self.name, field_name="name")
@@ -681,7 +689,7 @@ class ScoreBreakdown:
     total: float
     success: float
     efficiency: float
-    safety: float
+    safety: Optional[float]
     smoothness: Optional[float]
 
 
@@ -712,13 +720,22 @@ class ForceTelemetrySummary:
     collision_force_norm_mean: Optional[float] = None
     total_force_norm_max: Optional[float] = None
     total_force_norm_mean: Optional[float] = None
-    total_force_norm_max_newton: Optional[float] = None
-    total_force_norm_mean_newton: Optional[float] = None
     peak_segment_force_norm: Optional[float] = None
-    peak_segment_force_norm_newton: Optional[float] = None
     peak_segment_force_step: Optional[int] = None
     peak_segment_force_segment_id: Optional[int] = None
     peak_segment_force_time_s: Optional[float] = None
+    wire_force_magnitude_instant_N: Optional[float] = None
+    wire_force_magnitude_trial_max_N: Optional[float] = None
+    wire_force_magnitude_trial_mean_N: Optional[float] = None
+    wire_force_normal_instant_N: Optional[float] = None
+    wire_force_normal_trial_max_N: Optional[float] = None
+    wire_force_normal_trial_mean_N: Optional[float] = None
+    tip_force_magnitude_instant_N: Optional[float] = None
+    tip_force_magnitude_trial_max_N: Optional[float] = None
+    tip_force_magnitude_trial_mean_N: Optional[float] = None
+    tip_force_normal_instant_N: Optional[float] = None
+    tip_force_normal_trial_max_N: Optional[float] = None
+    tip_force_normal_trial_mean_N: Optional[float] = None
     gap_active_projected_count_sum: int = 0
     gap_explicit_mapped_count_sum: int = 0
     gap_unmapped_count_sum: int = 0
@@ -729,9 +746,6 @@ class ForceTelemetrySummary:
     tip_force_validation_status: str = "unmapped"
     tip_force_records: Tuple[dict, ...] = ()
     tip_force_total_vector_N: Vector3 = (0.0, 0.0, 0.0)
-    tip_force_total_norm_N: float = 0.0
-    tip_force_peak_normal_N: Optional[float] = None
-    tip_force_total_mean_N: Optional[float] = None
     lcp_mapped_wall_row_count_max: int = 0
     lcp_contact_export_coverage: Optional[float] = None
 
@@ -744,6 +758,7 @@ class TrialTelemetrySummary:
     steps_total: int
     steps_to_success: Optional[int]
     episode_reward: float
+    end_reason: str = "unknown"
     wall_time_s: Optional[float] = None
     sim_time_s: Optional[float] = None
     path_ratio_last: Optional[float] = None
@@ -807,8 +822,7 @@ class CandidateSummary:
     steps_total_mean: Optional[float] = None
     steps_to_success_mean: Optional[float] = None
     tip_speed_max_mean_mm_s: Optional[float] = None
-    wall_force_max_mean: Optional[float] = None
-    wall_force_max_mean_newton: Optional[float] = None
+    wire_force_normal_trial_max_mean_N: Optional[float] = None
     force_available_rate: Optional[float] = None
 
 

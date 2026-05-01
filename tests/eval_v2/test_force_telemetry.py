@@ -5,11 +5,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from steve_recommender.eval_v2.force_telemetry import (
+    ContactForceEvent,
     DEFAULT_TIP_THRESHOLD_MM,
     EvalV2ForceTelemetryCollector,
+    ForceHistorySummary,
+    _aggregate_contact_force_metrics,
     collision_dof_arc_lengths_from_distal_mm,
     _parse_constraint_rows,
     _project_constraint_forces,
+    _summarize_force_history,
     _unit_scale_to_newton,
 )
 import numpy as np
@@ -414,6 +418,126 @@ class ConstraintProjectionMathTests(unittest.TestCase):
         )
 
         np.testing.assert_allclose(proj_dt_half, proj_dt1 * 2.0, rtol=0.0, atol=1e-7)
+
+
+# ---------------------------------------------------------------------------
+# Canonical contact-force semantics
+# ---------------------------------------------------------------------------
+
+class CanonicalContactForceAggregationTests(unittest.TestCase):
+    def test_single_perpendicular_contact_has_matching_magnitude_and_normal(self) -> None:
+        metrics = _aggregate_contact_force_metrics(
+            [
+                ContactForceEvent(
+                    force_vector_N=(0.0, 0.0, -2.5),
+                    surface_normal=(0.0, 0.0, 1.0),
+                    is_tip=False,
+                )
+            ]
+        )
+
+        self.assertAlmostEqual(metrics.wire_force_magnitude_instant_N, 2.5)
+        self.assertAlmostEqual(metrics.wire_force_normal_instant_N, 2.5)
+        self.assertAlmostEqual(metrics.tip_force_magnitude_instant_N, 0.0)
+        self.assertAlmostEqual(metrics.tip_force_normal_instant_N, 0.0)
+
+    def test_single_parallel_contact_has_zero_normal_force(self) -> None:
+        metrics = _aggregate_contact_force_metrics(
+            [
+                ContactForceEvent(
+                    force_vector_N=(3.0, 0.0, 0.0),
+                    surface_normal=(0.0, 0.0, 1.0),
+                    is_tip=False,
+                )
+            ]
+        )
+
+        self.assertAlmostEqual(metrics.wire_force_magnitude_instant_N, 3.0)
+        self.assertAlmostEqual(metrics.wire_force_normal_instant_N, 0.0)
+
+    def test_negative_dot_compression_is_not_discarded(self) -> None:
+        metrics = _aggregate_contact_force_metrics(
+            [
+                ContactForceEvent(
+                    force_vector_N=(0.0, 0.0, -1.7),
+                    surface_normal=(0.0, 0.0, 1.0),
+                    is_tip=False,
+                )
+            ]
+        )
+
+        self.assertAlmostEqual(metrics.wire_force_magnitude_instant_N, 1.7)
+        self.assertAlmostEqual(metrics.wire_force_normal_instant_N, 1.7)
+
+    def test_multiple_contacts_use_max_normal_force(self) -> None:
+        metrics = _aggregate_contact_force_metrics(
+            [
+                ContactForceEvent(
+                    force_vector_N=(0.0, 0.0, -0.2),
+                    surface_normal=(0.0, 0.0, 1.0),
+                    is_tip=False,
+                ),
+                ContactForceEvent(
+                    force_vector_N=(0.0, 0.0, -0.8),
+                    surface_normal=(0.0, 0.0, 1.0),
+                    is_tip=False,
+                ),
+                ContactForceEvent(
+                    force_vector_N=(0.0, 0.4, 0.0),
+                    surface_normal=(0.0, 1.0, 0.0),
+                    is_tip=False,
+                ),
+            ]
+        )
+
+        self.assertAlmostEqual(metrics.wire_force_normal_instant_N, 0.8)
+        self.assertAlmostEqual(metrics.wire_force_magnitude_instant_N, 0.8)
+
+    def test_tip_region_restriction_excludes_shaft_contacts(self) -> None:
+        metrics = _aggregate_contact_force_metrics(
+            [
+                ContactForceEvent(
+                    force_vector_N=(0.0, 0.0, -1.4),
+                    surface_normal=(0.0, 0.0, 1.0),
+                    is_tip=False,
+                ),
+                ContactForceEvent(
+                    force_vector_N=(0.0, 0.0, -0.6),
+                    surface_normal=(0.0, 0.0, 1.0),
+                    is_tip=True,
+                ),
+            ]
+        )
+
+        self.assertAlmostEqual(metrics.wire_force_normal_instant_N, 1.4)
+        self.assertAlmostEqual(metrics.tip_force_normal_instant_N, 0.6)
+
+
+class ForceHistoryReductionTests(unittest.TestCase):
+    def test_instantaneous_force_is_not_a_running_max(self) -> None:
+        trajectory = [0.2, 0.8, 0.3, 0.5]
+
+        observed = [
+            _summarize_force_history(trajectory[: index + 1])
+            for index in range(len(trajectory))
+        ]
+
+        self.assertEqual(
+            [round(summary.instant_N, 6) for summary in observed],
+            [0.2, 0.8, 0.3, 0.5],
+        )
+        self.assertEqual(
+            [round(summary.trial_max_N, 6) for summary in observed],
+            [0.2, 0.8, 0.8, 0.8],
+        )
+
+    def test_history_summary_reports_mean_as_well(self) -> None:
+        summary = _summarize_force_history([0.2, 0.8, 0.3, 0.5])
+
+        self.assertIsInstance(summary, ForceHistorySummary)
+        self.assertAlmostEqual(summary.instant_N, 0.5)
+        self.assertAlmostEqual(summary.trial_max_N, 0.8)
+        self.assertAlmostEqual(summary.trial_mean_N, 0.45)
 
 
 # ---------------------------------------------------------------------------

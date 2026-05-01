@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 from pathlib import Path
 from typing import Dict, Tuple
@@ -9,7 +10,7 @@ from typing import Dict, Tuple
 import torch.multiprocessing as mp
 
 from ..agents.factory import build_agent, maybe_resume_agent
-from ..config import DoctorConfig, TrainingRunConfig
+from ..config import ARCHVAR_EVAL_SEEDS, DoctorConfig, TrainingRunConfig
 from ..doctor.checks import run_doctor
 from ..doctor.report import exit_code, render_report
 from ..paths import LATEST_REPLAY_BUFFER_NAME, get_result_checkpoint_config_and_log_path
@@ -45,7 +46,9 @@ def training_parameters_for_results(config: TrainingRunConfig) -> Dict[str, obje
         "tool_ref": config.runtime.tool_ref,
         "anatomy_id": config.runtime.anatomy_id,
         "reward_profile": config.reward.profile,
-        "force_penalty_factor": config.reward.force_penalty_factor,
+        "force_alpha": config.reward.force_alpha,
+        "force_beta": config.reward.force_beta,
+        "force_region": config.reward.force_region,
         "learning_rate": config.learning_rate,
         "hidden_layers": list(config.hidden_layers),
         "embedder_nodes": config.embedder_nodes,
@@ -55,6 +58,8 @@ def training_parameters_for_results(config: TrainingRunConfig) -> Dict[str, obje
         "eval_every": config.eval_every,
         "train_max_steps": config.train_max_steps,
         "eval_max_steps": config.eval_max_steps,
+        "write_step_trace_h5": config.write_step_trace_h5,
+        "step_trace_every_n_steps": config.step_trace_every_n_steps,
     }
 
 
@@ -97,14 +102,22 @@ def execute_training_run(config: TrainingRunConfig) -> Path:
         force=True,
     )
 
+    # Match the legacy ArchVar script: build one randomized scene, then reuse a
+    # deep-copied twin for evaluation so train/eval start from the same scene state.
     intervention_train = build_intervention(runtime_spec=config.runtime)
-    intervention_eval = build_intervention(runtime_spec=config.runtime)
+    intervention_eval = deepcopy(intervention_train)
     env_train = build_env(
         intervention=intervention_train,
         reward_spec=config.reward,
         mode="train",
         n_max_steps=config.train_max_steps or 1000,
         reward_csv_path=config_folder / "reward_train.csv",
+        step_trace_path=(
+            config_folder / "step_trace_train.h5"
+            if config.write_step_trace_h5
+            else None
+        ),
+        step_trace_every_n_steps=config.step_trace_every_n_steps,
     )
     env_eval = build_env(
         intervention=intervention_eval,
@@ -112,6 +125,12 @@ def execute_training_run(config: TrainingRunConfig) -> Path:
         mode="eval",
         n_max_steps=config.eval_max_steps or 1000,
         reward_csv_path=config_folder / "reward_eval.csv",
+        step_trace_path=(
+            config_folder / "step_trace_eval.h5"
+            if config.write_step_trace_h5
+            else None
+        ),
+        step_trace_every_n_steps=config.step_trace_every_n_steps,
     )
 
     env_train_config = config_folder / "env_train.yml"
@@ -163,7 +182,7 @@ def execute_training_run(config: TrainingRunConfig) -> Path:
             config.explore_episodes_between_updates,
             config.update_per_explore_step,
             eval_episodes=config.eval_episodes,
-            eval_seeds=list(config.eval_seeds) if config.eval_seeds else None,
+            eval_seeds=list(config.eval_seeds or ARCHVAR_EVAL_SEEDS),
         )
     finally:
         agent.close()

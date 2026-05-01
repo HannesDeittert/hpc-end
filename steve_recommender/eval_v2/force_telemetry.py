@@ -274,6 +274,85 @@ class ForceRuntimeStatus:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class ContactForceEvent:
+    """One wire-vessel contact event reduced in Newton space.
+
+    `force_vector_N` uses the wire-to-wall force direction so the normal-force
+    component is `max(0, -dot(force_vector_N, surface_normal))` for the current
+    inward-facing ArchVar vessel mesh normals.
+    """
+
+    force_vector_N: tuple[float, float, float]
+    surface_normal: tuple[float, float, float]
+    is_tip: bool = False
+
+
+@dataclass(frozen=True)
+class ContactForceMetrics:
+    """Instantaneous per-step force metrics across all mapped contacts."""
+
+    wire_force_magnitude_instant_N: float = 0.0
+    wire_force_normal_instant_N: float = 0.0
+    tip_force_magnitude_instant_N: float = 0.0
+    tip_force_normal_instant_N: float = 0.0
+
+
+@dataclass(frozen=True)
+class ForceHistorySummary:
+    """Current instant plus trial reductions for one force time series."""
+
+    instant_N: float
+    trial_max_N: float
+    trial_mean_N: float
+
+
+def _aggregate_contact_force_metrics(
+    events: Sequence[ContactForceEvent],
+) -> ContactForceMetrics:
+    """Reduce mapped contact events to instantaneous whole-wire and tip metrics."""
+
+    wire_force_magnitude_instant_N = 0.0
+    wire_force_normal_instant_N = 0.0
+    tip_force_magnitude_instant_N = 0.0
+    tip_force_normal_instant_N = 0.0
+
+    for event in events:
+        force_vector_N = np.asarray(event.force_vector_N, dtype=np.float64).reshape((3,))
+        surface_normal = np.asarray(event.surface_normal, dtype=np.float64).reshape((3,))
+        magnitude = float(np.linalg.norm(force_vector_N))
+        # Mesh triangle winding currently yields inward-facing lumen normals for
+        # the ArchVar anatomy meshes. Compressive wire->wall contact therefore
+        # appears on the negative side of dot(F_wire_to_wall, n_inward).
+        normal_component = max(0.0, float(-np.dot(force_vector_N, surface_normal)))
+
+        wire_force_magnitude_instant_N = max(wire_force_magnitude_instant_N, magnitude)
+        wire_force_normal_instant_N = max(wire_force_normal_instant_N, normal_component)
+        if event.is_tip:
+            tip_force_magnitude_instant_N = max(tip_force_magnitude_instant_N, magnitude)
+            tip_force_normal_instant_N = max(tip_force_normal_instant_N, normal_component)
+
+    return ContactForceMetrics(
+        wire_force_magnitude_instant_N=wire_force_magnitude_instant_N,
+        wire_force_normal_instant_N=wire_force_normal_instant_N,
+        tip_force_magnitude_instant_N=tip_force_magnitude_instant_N,
+        tip_force_normal_instant_N=tip_force_normal_instant_N,
+    )
+
+
+def _summarize_force_history(samples: Sequence[float]) -> ForceHistorySummary:
+    """Return the latest instantaneous value plus trial max/mean reductions."""
+
+    if not samples:
+        return ForceHistorySummary(instant_N=0.0, trial_max_N=0.0, trial_mean_N=0.0)
+    series = np.asarray(samples, dtype=np.float64).reshape((-1,))
+    return ForceHistorySummary(
+        instant_N=float(series[-1]),
+        trial_max_N=float(np.max(series)),
+        trial_mean_N=float(np.mean(series)),
+    )
+
+
 class EvalV2ForceTelemetryCollector:
     """Collect force telemetry directly from SOFA runtime objects for eval_v2."""
 
@@ -338,6 +417,10 @@ class EvalV2ForceTelemetryCollector:
         self._triangle_force_records: list[dict] = []
         self._wire_force_records: list[dict] = []
         self._tip_force_proxy_per_step_N: list[float] = []
+        self._wire_force_magnitude_instant_samples_N: list[float] = []
+        self._wire_force_normal_instant_samples_N: list[float] = []
+        self._tip_force_magnitude_instant_samples_N: list[float] = []
+        self._tip_force_normal_instant_samples_N: list[float] = []
         self._triangle_normals_by_id: dict[int, np.ndarray] = {}
 
     @property
@@ -484,7 +567,9 @@ class EvalV2ForceTelemetryCollector:
 
         current_root_id = id(root)
         if self._last_root_id == current_root_id and self._status.source != "uninitialized":
-            logger.info(f"[force_telemetry] Reusing cached status: {self._status.source}")
+            logger.debug(
+                "[force_telemetry] Reusing cached status: %s", self._status.source
+            )
             return self._status
 
         logger.info(f"[force_telemetry] ensure_runtime called with mode={self._spec.mode}")
@@ -537,20 +622,20 @@ class EvalV2ForceTelemetryCollector:
             if force_like.size > 0:
                 self._lcp_force_like_max_samples.append(float(np.max(force_like)))
 
-    def _sample_constraint_projection(self, root: Any, step_index: int) -> None:
+    def _sample_constraint_projection(self, root: Any, step_index: int) -> ContactForceMetrics:
         """Project constraint rows to world-space per-dof forces and assemble
         per-triangle and per-wire sparse records when mapping is available.
         """
         self._ensure_triangle_normals_loaded()
         lcp = getattr(root, "LCP", None)
         if lcp is None:
-            return
+            return ContactForceMetrics()
         raw = _read_data_field(lcp, "constraintForces", None)
         if raw is None:
-            return
+            return ContactForceMetrics()
         lcp_arr = np.asarray(raw, dtype=np.float64).reshape(-1)
         if lcp_arr.size == 0:
-            return
+            return ContactForceMetrics()
 
         # Resolve dt
         dt_s = _to_float(_read_data_field(root, "dt", None))
@@ -592,6 +677,7 @@ class EvalV2ForceTelemetryCollector:
         triangle_force_acc: dict[int, np.ndarray] = {}
         triangle_row_count: dict[int, int] = {}
         wire_force_list: list[dict] = []
+        contact_events: list[ContactForceEvent] = []
         arc_lengths_from_distal_mm: dict[int, float] = {}
         if positions is not None and positions.size > 0:
             if not self._tip_arc_length_fallback_logged:
@@ -745,19 +831,40 @@ class EvalV2ForceTelemetryCollector:
                 row_to_force_N[row_idx] = np.asarray(
                     rc.get("force_vec", np.zeros((3,))), dtype=np.float64
                 ).reshape((3,)) * float(self._force_scale_to_newton)
-            for row_idx in tip_row_ids:
+            row_to_tip_flag = {
+                int(record["row_idx"]): bool(record.get("is_tip", False))
+                for record in wire_force_list
+            }
+            for row_idx, force_vec_N in row_to_force_N.items():
                 for triangle_id in row_to_tri.get(row_idx, set()) if 'row_to_tri' in locals() else ():
                     normal = self._triangle_normals_by_id.get(int(triangle_id))
-                    force_vec_N = row_to_force_N.get(int(row_idx))
-                    if normal is None or force_vec_N is None:
+                    if normal is None:
                         continue
-                    wire_to_wall_force_N = -force_vec_N
-                    compressive_normal_N = max(
-                        0.0, float(np.dot(wire_to_wall_force_N, normal))
+                    wire_to_wall_force_N = tuple((-force_vec_N).tolist())
+                    contact_events.append(
+                        ContactForceEvent(
+                            force_vector_N=wire_to_wall_force_N,
+                            surface_normal=tuple(normal.tolist()),
+                            is_tip=bool(row_to_tip_flag.get(int(row_idx), False)),
+                        )
                     )
-                    if compressive_normal_N > tip_force_step_max_N:
-                        tip_force_step_max_N = compressive_normal_N
+            contact_metrics = _aggregate_contact_force_metrics(contact_events)
+            tip_force_step_max_N = float(contact_metrics.tip_force_normal_instant_N)
+        else:
+            contact_metrics = ContactForceMetrics()
         self._tip_force_proxy_per_step_N.append(float(tip_force_step_max_N))
+        self._wire_force_magnitude_instant_samples_N.append(
+            float(contact_metrics.wire_force_magnitude_instant_N)
+        )
+        self._wire_force_normal_instant_samples_N.append(
+            float(contact_metrics.wire_force_normal_instant_N)
+        )
+        self._tip_force_magnitude_instant_samples_N.append(
+            float(contact_metrics.tip_force_magnitude_instant_N)
+        )
+        self._tip_force_normal_instant_samples_N.append(
+            float(contact_metrics.tip_force_normal_instant_N)
+        )
 
         # Update mapping counters
         self._lcp_mapped_wall_row_count_max = max(self._lcp_mapped_wall_row_count_max, int(len(mapped_rows)))
@@ -768,6 +875,7 @@ class EvalV2ForceTelemetryCollector:
             "unmapped_rows": int(len(unmapped_rows)),
             "mapping_coverage": None if (len(mapped_rows) + len(unmapped_rows)) == 0 else float(len(mapped_rows) / (len(mapped_rows) + len(unmapped_rows))),
         }
+        return contact_metrics
 
     def _sample_contact_export(self, root: Any) -> None:
         """Read WireWallContactExport and accumulate mapped wall-contact LCP force samples."""
@@ -977,6 +1085,19 @@ class EvalV2ForceTelemetryCollector:
             self._association_method = "force_points_nearest_triangle"
             self._association_coverage = 0.0
 
+        wire_force_magnitude = _summarize_force_history(
+            self._wire_force_magnitude_instant_samples_N
+        )
+        wire_force_normal = _summarize_force_history(
+            self._wire_force_normal_instant_samples_N
+        )
+        tip_force_magnitude = _summarize_force_history(
+            self._tip_force_magnitude_instant_samples_N
+        )
+        tip_force_normal = _summarize_force_history(
+            self._tip_force_normal_instant_samples_N
+        )
+
         tip_force_records = tuple(
             dict(record) for record in self._wire_force_records if bool(record.get("is_tip", False))
         )
@@ -1025,10 +1146,7 @@ class EvalV2ForceTelemetryCollector:
             lcp_sum_abs_mean=lcp_sum_abs_mean,
             total_force_norm_max=total_force_norm_max,
             total_force_norm_mean=total_force_norm_mean,
-            total_force_norm_max_newton=total_force_norm_max,
-            total_force_norm_mean_newton=total_force_norm_mean,
             peak_segment_force_norm=self._peak_segment_force_norm,
-            peak_segment_force_norm_newton=self._peak_segment_force_norm,
             peak_segment_force_step=self._peak_segment_force_step,
             peak_segment_force_segment_id=self._peak_segment_force_segment_id,
             peak_segment_force_time_s=(
@@ -1036,6 +1154,18 @@ class EvalV2ForceTelemetryCollector:
                 if self._peak_segment_force_step is None
                 else float(self._peak_segment_force_step) * self._action_dt_s
             ),
+            wire_force_magnitude_instant_N=wire_force_magnitude.instant_N,
+            wire_force_magnitude_trial_max_N=wire_force_magnitude.trial_max_N,
+            wire_force_magnitude_trial_mean_N=wire_force_magnitude.trial_mean_N,
+            wire_force_normal_instant_N=wire_force_normal.instant_N,
+            wire_force_normal_trial_max_N=wire_force_normal.trial_max_N,
+            wire_force_normal_trial_mean_N=wire_force_normal.trial_mean_N,
+            tip_force_magnitude_instant_N=tip_force_magnitude.instant_N,
+            tip_force_magnitude_trial_max_N=tip_force_magnitude.trial_max_N,
+            tip_force_magnitude_trial_mean_N=tip_force_magnitude.trial_mean_N,
+            tip_force_normal_instant_N=tip_force_normal.instant_N,
+            tip_force_normal_trial_max_N=tip_force_normal.trial_max_N,
+            tip_force_normal_trial_mean_N=tip_force_normal.trial_mean_N,
             tip_force_available=tip_force_available,
             tip_force_validation_status="ok" if tip_force_available else "unmapped",
             tip_force_records=tip_force_records,
@@ -1043,17 +1173,6 @@ class EvalV2ForceTelemetryCollector:
                 float(tip_force_total_vector[0]),
                 float(tip_force_total_vector[1]),
                 float(tip_force_total_vector[2]),
-            ),
-            tip_force_total_norm_N=float(np.linalg.norm(tip_force_total_vector)),
-            tip_force_peak_normal_N=(
-                float(np.max(self._tip_force_proxy_per_step_N))
-                if self._tip_force_proxy_per_step_N
-                else None
-            ),
-            tip_force_total_mean_N=(
-                float(np.mean(self._tip_force_proxy_per_step_N))
-                if self._tip_force_proxy_per_step_N
-                else None
             ),
             lcp_mapped_wall_row_count_max=int(self._lcp_mapped_wall_row_count_max),
             lcp_contact_export_coverage=(
@@ -1065,9 +1184,13 @@ class EvalV2ForceTelemetryCollector:
 
 
 __all__ = [
+    "ContactForceEvent",
     "DEFAULT_TIP_THRESHOLD_MM",
     "EvalV2ForceTelemetryCollector",
+    "ForceHistorySummary",
     "ForceRuntimeStatus",
+    "_aggregate_contact_force_metrics",
     "collision_dof_arc_lengths_from_distal_mm",
     "resolve_monitor_plugin_path",
+    "_summarize_force_history",
 ]
