@@ -80,6 +80,45 @@ The package lives in:
 - [target_discovery.py](/home/hannes-deittert/dev/Uni/master-project/steve_recommender/eval_v2/target_discovery.py)
   - target mode support and branch/target discovery helpers
 
+### Experimental prep scripts
+
+- [experimental_prep_scripts/sample_anatomies.py](/home/hannes-deittert/dev/Uni/master-project/steve_recommender/eval_v2/experimental_prep_scripts/sample_anatomies.py)
+  - offline helper for sampling a reproducible experiment subset from an anatomy registry
+- computes a per-anatomy tortuosity score from the stored centerline bundles
+- supports global random sampling or stratified sampling by tortuosity tertiles/quartiles
+- supports `random` and `maximin` selection inside each stratum; with `--strata none` the same sampler works on the full pool without stratification
+
+Typical usage:
+
+```bash
+python -m steve_recommender.eval_v2.experimental_prep_scripts.sample_anatomies \
+  --pool-path data/anatomy_registry \
+  --n 200 \
+  --seed 123 \
+  --strata tortuosity_quartiles \
+  --sampling-method maximin \
+  --branches bct,lcca,lsa \
+  --output results/experimental_prep/sample_200.json
+```
+
+If you want a plain global sample without stratification, use:
+
+```bash
+python -m steve_recommender.eval_v2.experimental_prep_scripts.sample_anatomies \
+  --pool-path data/anatomy_registry \
+  --n 200 \
+  --seed 123 \
+  --strata none \
+  --sampling-method random \
+  --output results/experimental_prep/sample_200.json
+```
+
+The output JSON contains:
+
+- the exact sampling parameters under `metadata`
+- the derived tortuosity thresholds when stratification is enabled
+- the selected anatomies with `record_id`, source paths, tortuosity, and per-branch curvature values
+
 ### CLI entry point
 
 - [cli.py](/home/hannes-deittert/dev/Uni/master-project/steve_recommender/eval_v2/cli.py)
@@ -350,10 +389,11 @@ python -m steve_recommender.eval_v2.cli list-target-modes
 
 ### 6.2 Target modes
 
-The CLI supports three target definitions:
+The CLI supports four target definitions:
 
 - `branch_end`
 - `branch_index`
+- `centerline_random`
 - `manual`
 
 #### `branch_end`
@@ -377,6 +417,21 @@ Multi-branch is also supported:
 --target-branch lcca
 --target-index 7
 ```
+
+#### `centerline_random`
+
+This matches the ArchVar-style seeded random target selection more closely:
+it samples one random point from the allowed branches once, then keeps that
+target fixed for the whole run via `--target-seed`.
+
+```bash
+--target-mode centerline_random
+--target-branches lcca,rcca,lsa,rsa,bct,co
+--target-seed 12345
+```
+
+If `--target-branches` is omitted, eval_v2 uses all branches of the selected
+anatomy.
 
 #### `manual`
 
@@ -637,7 +692,40 @@ Rules:
 - The `--job-name` is ignored when `--resume-output-dir` is set; the existing directory is used as-is.
 - If the output directory contains no `trials.h5`, the run starts fresh (safe to use even on a first attempt).
 
-### 6.12 Useful additional execution options
+### 6.12 Multi-wire comparison in one run
+
+You can repeat `--execution-wire` to compare several wires in one experiment.
+In that mode, eval_v2 mirrors the GUI: it takes the first valid candidate for
+each selected wire and evaluates them under the same anatomy, target, and seed
+schedule.
+
+Example:
+
+```bash
+python -m steve_recommender.eval_v2.cli run \
+  --job-name compare_selected_wires \
+  --anatomy Tree_00 \
+  --execution-wire steve_default/tight_j \
+  --execution-wire steve_default/standard_j \
+  --execution-wire steve_default/gentle \
+  --target-mode branch_end \
+  --target-branches lcca \
+  --trial-count 100 \
+  --env-seeds 123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123,123 \
+  --policy-mode deterministic \
+  --policy-device cpu \
+  --workers 12
+```
+
+Rules:
+
+- do not combine multi-wire mode with `--candidate-name`, `--policy-name`,
+  `--policy-agent-ref`, or `--policy-checkpoint`
+- for a single execution wire, the old explicit selector flags still apply
+- if you want the target to stay fixed across all 100 trials, repeat the same
+  environment seed 100 times, as shown above
+
+### 6.13 Useful additional execution options
 
 - `--threshold-mm`
   - target success threshold

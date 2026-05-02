@@ -71,3 +71,7 @@ data/**/agents/**/best_checkpoint.everl
 
 # Local archived training artifacts
 data/archive/
+
+# Generated anatomy registries
+data/anatomy_registry/
+results/anatomies/

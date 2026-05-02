@@ -323,11 +323,13 @@ def safe_reset_intervention(
         if seed is None
         else int(intervention._np_random.integers(0, 2**31))
     )
-    target_seed = (
-        None
-        if seed is None
-        else int(intervention._np_random.integers(0, 2**31))
-    )
+    target_seed_override = getattr(intervention.target, "_eval_v2_seed_override", None)
+    if target_seed_override is not None:
+        target_seed = int(target_seed_override)
+    elif seed is None:
+        target_seed = None
+    else:
+        target_seed = int(intervention._np_random.integers(0, 2**31))
     simulation_seed = (
         None
         if seed is None

@@ -1,0 +1,8 @@
+Collecting h5py
+  Downloading h5py-3.11.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (2.5 kB)
+Requirement already satisfied: numpy>=1.17.3 in /home/hannes-deittert/miniconda3/envs/master-project/lib/python3.8/site-packages (from h5py) (1.24.3)
+Downloading h5py-3.11.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (5.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.3/5.3 MB 9.8 MB/s eta 0:00:00
+Installing collected packages: h5py
+Successfully installed h5py-3.11.0
+

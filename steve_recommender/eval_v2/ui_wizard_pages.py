@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -312,6 +312,12 @@ AnatomyCardWidget[selected="true"] QLabel#anatomyTitle {
 
         self.set_selected(False)
 
+    def set_thumbnail(self, thumbnail: Optional[QPixmap]) -> None:
+        if thumbnail is None:
+            thumbnail = self._build_placeholder_thumbnail(size=140)
+        self._base_thumbnail = thumbnail
+        self.thumbnail_label.setPixmap(self._base_thumbnail)
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
@@ -380,9 +386,24 @@ class AnatomySelectionPage(WizardPage):
         self._cards: List[AnatomyCardWidget] = []
         self._anatomies: List[AorticArchAnatomy] = []
         self._thumbnail_cache: Dict[str, QPixmap] = {}
+        self._card_by_index: Dict[int, AnatomyCardWidget] = {}
+        self._loaded_thumbnail_keys: set[str] = set()
+        self._thumbnail_refresh_scheduled = False
+        self._scroll.viewport().installEventFilter(self)
+        self._scroll.verticalScrollBar().valueChanged.connect(self._schedule_thumbnail_refresh)
+        self._scroll.horizontalScrollBar().valueChanged.connect(self._schedule_thumbnail_refresh)
 
     def on_activated(self) -> None:
         self._render_anatomies()
+        self._schedule_thumbnail_refresh()
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if watched is self._scroll.viewport() and event.type() in {
+            QEvent.Resize,
+            QEvent.Paint,
+        }:
+            self._schedule_thumbnail_refresh()
+        return super().eventFilter(watched, event)
 
     def _render_anatomies(self) -> None:
         while self._grid.count():
@@ -392,15 +413,18 @@ class AnatomySelectionPage(WizardPage):
                 widget.deleteLater()
 
         self._cards.clear()
-        self._anatomies = list(self.controller.get_anatomies())
+        self._card_by_index.clear()
+        self._loaded_thumbnail_keys.clear()
+        self._anatomies = list(
+            self.controller.get_anatomies(limit=100, random_sample=True)
+        )
         self.set_valid(False)
 
         for idx, anatomy in enumerate(self._anatomies):
             label = anatomy.record_id or f"{anatomy.arch_type}:{anatomy.seed}"
             metadata = f"arch={anatomy.arch_type} seed={anatomy.seed}"
-            thumbnail = self._thumbnail_for_anatomy(anatomy)
             card = AnatomyCardWidget(
-                title=label, metadata=metadata, thumbnail=thumbnail
+                title=label, metadata=metadata, thumbnail=None
             )
             card.setMinimumSize(220, 240)
             card.clicked.connect(lambda i=idx: self._on_selected(i))
@@ -408,6 +432,9 @@ class AnatomySelectionPage(WizardPage):
             col = idx % 3
             self._grid.addWidget(card, row, col)
             self._cards.append(card)
+            self._card_by_index[idx] = card
+
+        self._update_visible_thumbnails()
 
     def _thumbnail_for_anatomy(self, anatomy: AorticArchAnatomy) -> Optional[QPixmap]:
         mesh_path = anatomy.visualization_mesh_path or anatomy.simulation_mesh_path
@@ -423,6 +450,46 @@ class AnatomySelectionPage(WizardPage):
         if pixmap is not None:
             self._thumbnail_cache[cache_key] = pixmap
         return pixmap
+
+    def _schedule_thumbnail_refresh(self) -> None:
+        if self._thumbnail_refresh_scheduled:
+            return
+        self._thumbnail_refresh_scheduled = True
+        QTimer.singleShot(0, self._update_visible_thumbnails)
+
+    def _update_visible_thumbnails(self) -> None:
+        self._thumbnail_refresh_scheduled = False
+        if not self._cards:
+            return
+
+        viewport = self._scroll.viewport()
+        if viewport is None:
+            return
+
+        visible_rect = viewport.rect()
+        visible_rect.translate(
+            self._scroll.horizontalScrollBar().value(),
+            self._scroll.verticalScrollBar().value(),
+        )
+        margin = 250
+        visible_rect.adjust(-margin, -margin, margin, margin)
+
+        for idx, card in self._card_by_index.items():
+            if not card.geometry().intersects(visible_rect):
+                continue
+            anatomy = self._anatomies[idx]
+            mesh_path = anatomy.visualization_mesh_path or anatomy.simulation_mesh_path
+            if mesh_path is None or not mesh_path.exists():
+                continue
+            cache_key = str(mesh_path.resolve())
+            if cache_key in self._loaded_thumbnail_keys:
+                continue
+            pixmap = self._thumbnail_for_anatomy(anatomy)
+            if pixmap is None:
+                self._loaded_thumbnail_keys.add(cache_key)
+                continue
+            card.set_thumbnail(pixmap)
+            self._loaded_thumbnail_keys.add(cache_key)
 
     @staticmethod
     def _render_mesh_thumbnail(mesh_path, *, size: int = 150) -> Optional[QPixmap]:
@@ -2037,7 +2104,7 @@ class ResultsPage(WizardPage):
         max_episode_steps = (
             self._report.execution_plan.max_episode_steps
             if self._report.execution_plan is not None
-            else 1000
+            else 450
         )
         grouped: dict[str, list[dict[str, float | str | TrialResult | bool | None]]] = {}
         for trial in self._report.trials:
@@ -2276,7 +2343,7 @@ class ResultsPage(WizardPage):
         max_episode_steps = (
             self._report.execution_plan.max_episode_steps
             if self._report.execution_plan is not None
-            else 1000
+            else 450
         )
         self._current_wire_trials = list(trials)
         self._show_trial_list_panel()

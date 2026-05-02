@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalii_standard_j_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_universalii_standard_j_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalii_standard_j_best/checkpoints",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/archive/agents/complete/complete_universalii_standard_j/2026-04-28_020026_a100x2_archvar_universalii_standard_j_v2_resume_1584684/checkpoints/best_checkpoint.everl",
+  "source_agent_json": null,
+  "tool": "universal_ii/standard_j"
+}

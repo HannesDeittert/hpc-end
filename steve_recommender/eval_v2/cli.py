@@ -11,6 +11,7 @@ from .models import (
     AorticArchAnatomy,
     BranchEndTarget,
     BranchIndexTarget,
+    CenterlineRandomTarget,
     CandidateScoreSpec,
     EfficiencyScoreSpec,
     EvaluationCandidate,
@@ -70,6 +71,13 @@ def _parse_seed_list(text: str, *, flag_name: str) -> Tuple[int, ...]:
         raise ValueError(
             f"{flag_name} must be a comma-separated list of integers"
         ) from exc
+
+
+def _parse_wire_refs(texts: Sequence[str]) -> Tuple[WireRef, ...]:
+    wires = tuple(_parse_wire_ref(text) for text in texts)
+    if not wires:
+        raise ValueError("at least one execution wire must be provided")
+    return wires
 
 
 def _format_optional(value: object) -> str:
@@ -148,10 +156,16 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--execution-wire",
         required=True,
-        help="Execution wire formatted as 'model/wire'",
+        action="append",
+        dest="execution_wires",
+        metavar="WIRE",
+        help=(
+            "Execution wire formatted as 'model/wire'. Repeat the flag to "
+            "compare multiple wires in one run."
+        ),
     )
 
-    policy_group = run_parser.add_mutually_exclusive_group(required=True)
+    policy_group = run_parser.add_mutually_exclusive_group(required=False)
     policy_group.add_argument(
         "--candidate-name",
         default=None,
@@ -186,12 +200,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--target-mode",
         required=True,
-        choices=("branch_end", "branch_index", "manual"),
+        choices=("branch_end", "branch_index", "centerline_random", "manual"),
     )
     run_parser.add_argument(
         "--target-branches",
         default=None,
-        help="Comma-separated branches for branch_end mode",
+        help="Comma-separated branches for branch_end or centerline_random mode",
+    )
+    run_parser.add_argument(
+        "--target-seed",
+        type=int,
+        default=None,
+        help="Fixed seed for centerline_random target sampling.",
     )
     run_parser.add_argument(
         "--target-branch",
@@ -404,6 +424,30 @@ def _select_policy_for_run(
     )
 
 
+def _select_candidates_for_multi_wire_run(
+    *,
+    service: EvaluationService,
+    execution_wires: Sequence[WireRef],
+) -> Tuple[EvaluationCandidate, ...]:
+    candidates: list[EvaluationCandidate] = []
+    for wire in execution_wires:
+        wire_candidates = service.list_candidates(
+            execution_wire=wire,
+            include_cross_wire=False,
+        )
+        valid_candidates = tuple(
+            candidate
+            for candidate in wire_candidates
+            if Path(candidate.policy.checkpoint_path).exists()
+        )
+        if not valid_candidates:
+            raise ValueError(
+                f"No valid candidates found for execution wire {wire.tool_ref}"
+            )
+        candidates.append(valid_candidates[0])
+    return tuple(candidates)
+
+
 def _build_target_spec(
     *,
     args: argparse.Namespace,
@@ -441,6 +485,23 @@ def _build_target_spec(
             branch=args.target_branch,
             index=int(args.target_index),
             threshold_mm=float(args.threshold_mm),
+        )
+
+    if args.target_mode == "centerline_random":
+        if args.target_seed is None:
+            raise ValueError("--target-seed is required for target_mode='centerline_random'")
+        if args.target_branches is None:
+            branches = tuple(branch.name for branch in service.list_branches(anatomy))
+        else:
+            branches = _parse_branch_names(args.target_branches)
+        if not branches:
+            raise ValueError("centerline_random requires at least one branch")
+        for branch_name in branches:
+            service.get_branch(anatomy, branch_name=branch_name)
+        return CenterlineRandomTarget(
+            threshold_mm=float(args.threshold_mm),
+            branches=branches,
+            seed=int(args.target_seed),
         )
 
     if not args.manual_target:
@@ -603,22 +664,59 @@ def _handle_run(
             f"({int(args.trial_count)}), got {len(explicit_policy_seeds)}"
         )
 
+    execution_wires = _parse_wire_refs(args.execution_wires)
     anatomy = service.get_anatomy(record_id=args.anatomy)
-    execution_wire = _parse_wire_ref(args.execution_wire)
     target = _build_target_spec(args=args, service=service, anatomy=anatomy)
-    selected = _select_policy_for_run(
-        args=args,
-        service=service,
-        execution_wire=execution_wire,
-    )
-    if isinstance(selected, EvaluationCandidate):
-        candidate = selected
-    else:
-        candidate = service.build_candidate(
-            name=args.candidate_label or selected.name,
-            execution_wire=execution_wire,
-            policy=selected,
+    if len(execution_wires) > 1:
+        if any(
+            value is not None
+            for value in (
+                args.candidate_name,
+                args.policy_name,
+                args.policy_agent_ref,
+                args.policy_checkpoint,
+            )
+        ):
+            raise ValueError(
+                "When multiple execution wires are provided, do not set "
+                "--candidate-name, --policy-name, --policy-agent-ref, or "
+                "--policy-checkpoint; eval_v2 will select the first valid "
+                "candidate for each wire, matching the GUI"
+            )
+        candidates = _select_candidates_for_multi_wire_run(
+            service=service,
+            execution_wires=execution_wires,
         )
+    else:
+        execution_wire = execution_wires[0]
+        if not any(
+            value is not None
+            for value in (
+                args.candidate_name,
+                args.policy_name,
+                args.policy_agent_ref,
+                args.policy_checkpoint,
+            )
+        ):
+            raise ValueError(
+                "For a single execution wire, provide one of "
+                "--candidate-name, --policy-name, --policy-agent-ref, or "
+                "--policy-checkpoint"
+            )
+        selected = _select_policy_for_run(
+            args=args,
+            service=service,
+            execution_wire=execution_wire,
+        )
+        if isinstance(selected, EvaluationCandidate):
+            candidate = selected
+        else:
+            candidate = service.build_candidate(
+                name=args.candidate_label or selected.name,
+                execution_wire=execution_wire,
+                policy=selected,
+            )
+        candidates = (candidate,)
 
     scenario = EvaluationScenario(
         name=args.scenario_name,
@@ -640,7 +738,7 @@ def _handle_run(
     job = EvaluationJob(
         name=args.job_name,
         scenarios=(scenario,),
-        candidates=(candidate,),
+        candidates=candidates,
         execution=ExecutionPlan(
             trials_per_candidate=int(args.trial_count),
             base_seed=int(args.base_seed),

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
 
+import numpy as np
+
 from .models import AgentRef, AorticArchAnatomy, PolicySpec, WireRef
 
 
@@ -125,6 +127,8 @@ class FileBasedAnatomyDiscovery:
         self,
         *,
         registry_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
     ) -> Tuple[AorticArchAnatomy, ...]:
         """Return all anatomies from the configured registry index."""
 
@@ -136,6 +140,15 @@ class FileBasedAnatomyDiscovery:
                 f"Anatomy registry 'anatomies' field must be a list, got {type(raw_anatomies)}"
             )
         registry_dir = path.parent
+        if limit is not None:
+            limit = max(0, int(limit))
+            if limit < len(raw_anatomies):
+                if random_sample:
+                    rng = np.random.default_rng()
+                    indices = np.sort(rng.choice(len(raw_anatomies), size=limit, replace=False))
+                    raw_anatomies = [raw_anatomies[int(idx)] for idx in indices]
+                else:
+                    raw_anatomies = raw_anatomies[:limit]
         return tuple(
             _map_anatomy_entry(raw, registry_dir=registry_dir) for raw in raw_anatomies
         )

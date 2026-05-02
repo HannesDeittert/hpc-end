@@ -8,7 +8,7 @@ from typing import Literal, Optional, Tuple, Union
 Vector3 = Tuple[float, float, float]
 RotationYZXDeg = Tuple[float, float, float]
 ScalingXYZD = Tuple[float, float, float, float]
-TargetModeKind = Literal["branch_end", "branch_index", "manual"]
+TargetModeKind = Literal["branch_end", "branch_index", "centerline_random", "manual"]
 
 PolicySourceKind = Literal["registry", "explicit"]
 PolicyMode = Literal["deterministic", "stochastic"]
@@ -276,6 +276,21 @@ class BranchIndexTarget:
 
 
 @dataclass(frozen=True)
+class CenterlineRandomTarget:
+    """Seeded ArchVar-style random centerline target."""
+
+    kind: Literal["centerline_random"] = "centerline_random"
+    threshold_mm: float = 5.0
+    branches: Tuple[str, ...] = ()
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        _require_positive(self.threshold_mm, field_name="threshold_mm")
+        for branch in self.branches:
+            _require_non_empty(branch, field_name="branches")
+
+
+@dataclass(frozen=True)
 class ManualTarget:
     """Manual vessel-coordinate targets for `eve.intervention.target.Manual`."""
 
@@ -295,7 +310,7 @@ class ManualTarget:
             )
 
 
-TargetSpec = Union[BranchEndTarget, BranchIndexTarget, ManualTarget]
+TargetSpec = Union[BranchEndTarget, BranchIndexTarget, CenterlineRandomTarget, ManualTarget]
 
 
 @dataclass(frozen=True)
@@ -871,6 +886,7 @@ __all__ = [
     "AgentRef",
     "BranchEndTarget",
     "BranchIndexTarget",
+    "CenterlineRandomTarget",
     "CandidateSummary",
     "CandidateScoreSpec",
     "EfficiencyScoreSpec",

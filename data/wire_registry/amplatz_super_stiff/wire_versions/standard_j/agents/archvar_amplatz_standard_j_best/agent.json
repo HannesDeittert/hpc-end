@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_standard_j_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_amplatz_standard_j_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_standard_j_best/checkpoints",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/archive/agents/complete/complete_amplatz_standardj/2026-04-26_193314_a100x2_archvar_amplatz_standardj_resume_1583952/checkpoints/best_checkpoint.everl",
+  "source_agent_json": null,
+  "tool": "amplatz_super_stiff/standard_j"
+}

@@ -26,6 +26,15 @@ TARGET_MODE_DESCRIPTORS: Tuple[TargetModeDescriptor, ...] = (
         requires_manual_points=False,
     ),
     TargetModeDescriptor(
+        kind="centerline_random",
+        label="Centerline Random",
+        description="Sample one random centerline point from the allowed branches and keep it fixed via seed.",
+        requires_branch_selection=False,
+        requires_index_selection=False,
+        allows_multi_branch_selection=True,
+        requires_manual_points=False,
+    ),
+    TargetModeDescriptor(
         kind="manual",
         label="Manual Coordinates",
         description="Provide explicit vessel-space coordinates instead of a named branch target.",

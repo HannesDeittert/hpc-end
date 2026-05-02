@@ -294,8 +294,18 @@ class ClinicalUIController(QObject):
     def active_worker(self) -> Optional[EvaluationWorker]:
         return self._active_worker
 
-    def get_anatomies(self, *, registry_path=None):
-        return self._service.list_anatomies(registry_path=registry_path)
+    def get_anatomies(
+        self,
+        *,
+        registry_path=None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
+    ):
+        return self._service.list_anatomies(
+            registry_path=registry_path,
+            limit=limit,
+            random_sample=random_sample,
+        )
 
     def get_execution_wires(self):
         return self._service.list_execution_wires()

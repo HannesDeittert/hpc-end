@@ -765,6 +765,8 @@ class AnatomyDiscoveryPort(Protocol):
         self,
         *,
         registry_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
     ) -> Tuple[AorticArchAnatomy, ...]:
         """Return all discoverable anatomies from the configured registry file."""
 
@@ -843,6 +845,8 @@ class EvaluationService(ABC):
         self,
         *,
         registry_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
     ) -> Tuple[AorticArchAnatomy, ...]:
         """Return discoverable anatomies as resolved domain models."""
 
@@ -1387,8 +1391,14 @@ class DefaultEvaluationService(EvaluationService):
         self,
         *,
         registry_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
     ) -> Tuple[AorticArchAnatomy, ...]:
-        return self._anatomy_discovery.list_anatomies(registry_path=registry_path)
+        return self._anatomy_discovery.list_anatomies(
+            registry_path=registry_path,
+            limit=limit,
+            random_sample=random_sample,
+        )
 
     def get_anatomy(
         self,
@@ -1725,7 +1735,7 @@ def _parse_execution_plan(payload: Any) -> ExecutionPlan:
         policy_explicit_seeds=tuple(
             int(seed) for seed in payload.get("policy_explicit_seeds", ())
         ),
-        max_episode_steps=int(payload.get("max_episode_steps", 1000)),
+        max_episode_steps=int(payload.get("max_episode_steps", 450)),
         policy_device=str(payload.get("policy_device", "cuda")),
         policy_mode=str(payload.get("policy_mode", "deterministic")),
         stochastic_environment_mode=str(
