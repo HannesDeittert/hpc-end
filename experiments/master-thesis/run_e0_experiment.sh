@@ -4,12 +4,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+CPU_CORES="$("${PYTHON_BIN}" - <<'PY'
+import os
+print(len(os.sched_getaffinity(0)))
+PY
+)"
+DEFAULT_WORKER_COUNT="$(( CPU_CORES > 5 ? CPU_CORES - 5 : 1 ))"
 
 SAMPLE_JSON="${SAMPLE_JSON:-${PROJECT_ROOT}/results/experimental_prep/sample_12.json}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/results/master_thesis/e0}"
 TRIAL_COUNT="${TRIAL_COUNT:-100}"
 MAX_EPISODE_STEPS="${MAX_EPISODE_STEPS:-1000}"
-WORKER_COUNT="${WORKER_COUNT:-12}"
+WORKER_COUNT="${WORKER_COUNT:-${DEFAULT_WORKER_COUNT}}"
 POLICY_DEVICE="${POLICY_DEVICE:-cpu}"
 BASE_SEED_START="${BASE_SEED_START:-123}"
 TARGET_SEED_START="${TARGET_SEED_START:-9000}"
@@ -49,6 +55,7 @@ if [ "${#ANATOMIES[@]}" -eq 0 ]; then
 fi
 
 mkdir -p "${OUTPUT_ROOT}"
+echo "[E0] cpu_cores=${CPU_CORES} worker_count=${WORKER_COUNT} default_worker_count=${DEFAULT_WORKER_COUNT}"
 
 base_seed="${BASE_SEED_START}"
 target_seed="${TARGET_SEED_START}"
