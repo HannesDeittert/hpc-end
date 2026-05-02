@@ -1,20 +1,22 @@
 {
   "anatomy_type": "aortic_arch",
-  "arch_type": "IV",
-  "seed": 1014,
+  "arch_type": "I",
+  "centerline_bundle_path": "centerline.npz",
+  "centerline_npz": "centerline.npz",
+  "omit_axis": null,
+  "record_id": "Tree_14",
   "rotation_yzx_deg": [
     0.0,
     0.0,
     0.0
   ],
   "scaling_xyzd": [
-    1.0,
-    1.0,
-    1.0,
-    1.0
+    1.2200000000000002,
+    1.2200000000000002,
+    0.84,
+    0.8500000238418579
   ],
-  "omit_axis": null,
+  "seed": 1054707863,
   "simulation_mesh_path": "mesh/simulationmesh.obj",
-  "visualization_mesh_path": "mesh/visumesh.obj",
-  "centerline_bundle_path": null
+  "visualization_mesh_path": "mesh/simulationmesh.obj"
 }

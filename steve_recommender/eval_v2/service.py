@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import concurrent.futures
 import csv
+import inspect
 import json
+import logging
+import math
+import multiprocessing as mp
 from abc import ABC, abstractmethod
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Tuple
+from typing import Any, Callable, Optional, Protocol, Sequence, Tuple
 
+import h5py
 import numpy as np
 
 from .discovery import (
@@ -27,6 +33,16 @@ from .models import (
     EvaluationJob,
     EvaluationReport,
     HistoricalReportSummary,
+    ExecutionPlan,
+    EvaluationScenario,
+    ScoringSpec,
+    VisualizationSpec,
+    TrialIndicatorSpec,
+    ForceScoringSpec,
+    SafetyScoreSpec,
+    EfficiencyScoreSpec,
+    CandidateScoreSpec,
+    SmoothnessScoreSpec,
     PolicySpec,
     ScoreBreakdown,
     TargetModeDescriptor,
@@ -36,13 +52,144 @@ from .models import (
     ForceTelemetrySummary,
     WireRef,
 )
-from .runner import run_single_trial
+from .force_trace_persistence import write_anatomy_mesh
+from .runner import configure_cpu_eval_threads, run_single_trial
 from .runtime import PreparedEvaluationRuntime, prepare_evaluation_runtime
+from .scoring import soft_score_total
 from .target_discovery import AnatomyTargetDiscovery
+from third_party.stEVE.eve.intervention.vesseltree.util.meshing import load_mesh
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ParallelTrialTask:
+    scenario_index: int
+    candidate_index: int
+    trial_index: int
+    seed: int
+    policy_seed: int | None
+    scenario: EvaluationScenario
+    candidate: EvaluationCandidate
+    execution: ExecutionPlan
+    scoring: ScoringSpec
+    registry_path: Path
+    policy_device: str
+    output_dir: Path
+
+
+@dataclass(frozen=True)
+class _ParallelTrialOutcome:
+    scenario_index: int
+    candidate_index: int
+    trial_index: int
+    trial: TrialResult
+
+
+def _run_parallel_trial_task(task: _ParallelTrialTask) -> _ParallelTrialOutcome:
+    configure_cpu_eval_threads(1)
+
+    runtime = prepare_evaluation_runtime(
+        candidate=task.candidate,
+        scenario=task.scenario,
+        registry_path=task.registry_path,
+        policy_device=task.policy_device,
+    )
+    try:
+        trial = run_single_trial(
+            runtime=runtime,
+            trial_index=task.trial_index,
+            seed=task.seed,
+            execution=task.execution,
+            scoring=task.scoring,
+            output_dir=task.output_dir,
+            frame_callback=None,
+            progress_callback=None,
+        )
+    finally:
+        _maybe_close(runtime.play_policy)
+        _maybe_close(runtime.intervention)
+
+    return _ParallelTrialOutcome(
+        scenario_index=task.scenario_index,
+        candidate_index=task.candidate_index,
+        trial_index=task.trial_index,
+        trial=trial,
+    )
+
+
+def _run_parallel_trial_tasks_process(
+    tasks: Sequence[_ParallelTrialTask],
+    *,
+    worker_count: int,
+    task_runner: Callable[
+        [_ParallelTrialTask], _ParallelTrialOutcome
+    ] = _run_parallel_trial_task,
+    outcome_callback: Optional[Callable[[_ParallelTrialOutcome], None]] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> Tuple[_ParallelTrialOutcome, ...]:
+    if not tasks:
+        return ()
+
+    max_workers = max(1, min(int(worker_count), len(tasks)))
+    if progress_callback is not None:
+        progress_callback(f"parallel_start workers={max_workers} total={len(tasks)}")
+
+    outcomes: list[_ParallelTrialOutcome] = []
+    ctx = mp.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=max_workers,
+        mp_context=ctx,
+    ) as pool:
+        futures = [pool.submit(task_runner, task) for task in tasks]
+        completed = 0
+        for future in concurrent.futures.as_completed(futures):
+            outcome = future.result()
+            outcomes.append(outcome)
+            if outcome_callback is not None:
+                outcome_callback(outcome)
+            completed += 1
+            if progress_callback is not None:
+                progress_callback(
+                    "parallel_trial_done completed={completed} total={total} "
+                    "scenario={scenario} candidate={candidate} trial_index={trial_index}".format(
+                        completed=completed,
+                        total=len(tasks),
+                        scenario=outcome.trial.scenario_name,
+                        candidate=outcome.trial.candidate_name,
+                        trial_index=outcome.trial.trial_index,
+                    )
+                )
+
+    outcomes.sort(
+        key=lambda item: (
+            item.scenario_index,
+            item.candidate_index,
+            item.trial_index,
+        )
+    )
+    if progress_callback is not None:
+        progress_callback(f"parallel_end completed={len(outcomes)} total={len(tasks)}")
+    return tuple(outcomes)
 
 
 def _generated_at_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _artifact_timestamp(generated_at: str) -> str:
+    return (
+        str(generated_at)
+        .replace("-", "")
+        .replace(":", "")
+        .replace("+00:00", "Z")
+        .replace(".", "_")
+    )
+
+
+def _job_output_dir(*, output_root: Path, job_name: str, generated_at: str) -> Path:
+    return Path(output_root) / f"{job_name}_{_artifact_timestamp(generated_at)}"
 
 
 def _finite_mean(values: Tuple[float | None, ...]) -> Optional[float]:
@@ -64,8 +211,10 @@ def _finite_std(values: Tuple[float | None, ...]) -> Optional[float]:
     )
     if not finite:
         return None
+    if len(finite) == 1:
+        return 0.0
     mean = sum(finite) / len(finite)
-    variance = sum((value - mean) ** 2 for value in finite) / len(finite)
+    variance = sum((value - mean) ** 2 for value in finite) / (len(finite) - 1)
     return variance**0.5
 
 
@@ -75,9 +224,54 @@ def _maybe_close(obj: object) -> None:
         close()
 
 
+def _anatomy_mesh_output_path(output_dir: Path, anatomy: AorticArchAnatomy) -> Path:
+    anatomy_id = anatomy.record_id or anatomy.arch_type
+    return output_dir / "meshes" / f"anatomy_{anatomy_id}.h5"
+
+
+def _load_mesh_arrays(mesh_path: Path) -> tuple[np.ndarray, np.ndarray]:
+    mesh = load_mesh(str(mesh_path)).extract_surface().triangulate()
+    faces = np.asarray(mesh.faces, dtype=np.int64).reshape((-1, 4))
+    if faces.shape[1] != 4 or np.any(faces[:, 0] != 3):
+        raise ValueError(f"mesh must contain triangle faces only: {mesh_path}")
+    triangle_indices = np.asarray(faces[:, 1:4], dtype=np.int32)
+    vertex_positions = np.asarray(mesh.points, dtype=np.float32).reshape((-1, 3))
+    return triangle_indices, vertex_positions
+
+
+def pre_write_meshes_for_job(job: EvaluationJob, output_dir: Path) -> tuple[Path, ...]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mesh_paths: list[Path] = []
+    written_anatomy_ids: set[str] = set()
+    for scenario in job.scenarios:
+        anatomy = scenario.anatomy
+        anatomy_id = anatomy.record_id or anatomy.arch_type
+        if anatomy_id in written_anatomy_ids:
+            continue
+        written_anatomy_ids.add(anatomy_id)
+        source_mesh_path = anatomy.simulation_mesh_path
+        if source_mesh_path is None:
+            continue
+        triangle_indices, vertex_positions = _load_mesh_arrays(Path(source_mesh_path))
+        mesh_output_path = _anatomy_mesh_output_path(output_dir, anatomy)
+        try:
+            write_anatomy_mesh(
+                mesh_output_path,
+                triangle_indices=triangle_indices,
+                vertex_positions=vertex_positions,
+                anatomy_id=anatomy_id,
+            )
+        except FileExistsError:
+            logger.debug("mesh trace already exists for anatomy %s", anatomy_id)
+        mesh_paths.append(mesh_output_path)
+    return tuple(mesh_paths)
+
+
 def _jsonable(value: Any) -> Any:
     if is_dataclass(value):
-        return {field.name: _jsonable(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _jsonable(getattr(value, field.name)) for field in fields(value)
+        }
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, tuple):
@@ -89,6 +283,262 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _scoring_spec_payload(scoring: ScoringSpec) -> dict[str, Any]:
+    return {
+        "trial_indicator": _jsonable(scoring.trial_indicator),
+        "force": _jsonable(scoring.force),
+        "safety_score": _jsonable(scoring.safety_score),
+        "efficiency_score": _jsonable(scoring.efficiency_score),
+        "candidate_score": {
+            "lambda": float(scoring.candidate_score.lambda_),
+            "beta": float(scoring.candidate_score.beta),
+            "default_weights": {
+                str(key): float(value)
+                for key, value in scoring.candidate_score.default_weights.items()
+            },
+            "active_components": list(scoring.candidate_score.active_components),
+        },
+        "smoothness_score": _jsonable(scoring.smoothness_score),
+    }
+
+
+def _summary_row(summary: CandidateSummary) -> dict[str, Any]:
+    return {
+        "scenario_name": summary.scenario_name,
+        "candidate_name": summary.candidate_name,
+        "execution_wire": summary.execution_wire.tool_ref,
+        "trained_on_wire": (
+            summary.trained_on_wire.tool_ref if summary.trained_on_wire is not None else ""
+        ),
+        "trial_count": summary.trial_count,
+        "success_rate": summary.success_rate,
+        "valid_rate": summary.valid_rate,
+        "soft_score_mean_valid": summary.soft_score_mean_valid,
+        "soft_score_std_valid": summary.soft_score_std_valid,
+        "candidate_score_final": summary.candidate_score_final,
+        "score_mean": summary.score_mean,
+        "score_std": summary.score_std,
+        "steps_total_mean": summary.steps_total_mean,
+        "steps_to_success_mean": summary.steps_to_success_mean,
+        "tip_speed_max_mean_mm_s": summary.tip_speed_max_mean_mm_s,
+        "wire_force_normal_trial_max_mean_N": summary.wire_force_normal_trial_max_mean_N,
+        "force_available_rate": summary.force_available_rate,
+    }
+
+
+def _trial_rows(trials: Tuple[TrialResult, ...], *, max_episode_steps: int, tip_length_mm: float) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for trial in trials:
+        forces = trial.telemetry.forces
+        rows.append(
+            {
+                "scenario_name": trial.scenario_name,
+                "candidate_name": trial.candidate_name,
+                "execution_wire": trial.execution_wire.tool_ref,
+                "trained_on_wire": (
+                    trial.policy.trained_on_wire.tool_ref
+                    if trial.policy.trained_on_wire is not None
+                    else ""
+                ),
+                "trial_index": int(trial.trial_index),
+                "env_seed": int(trial.seed),
+                "policy_seed": trial.policy_seed,
+                "success": bool(trial.telemetry.success),
+                "valid_for_ranking": bool(trial.valid_for_ranking),
+                "force_within_safety_threshold": bool(trial.force_within_safety_threshold),
+                "steps_total": int(trial.telemetry.steps_total),
+                "steps_to_success": trial.telemetry.steps_to_success,
+                "end_reason": trial.telemetry.end_reason,
+                "max_episode_steps": int(max_episode_steps),
+                "episode_reward": float(trial.telemetry.episode_reward),
+                "sim_time_s": trial.telemetry.sim_time_s,
+                "wall_time_s": trial.telemetry.wall_time_s,
+                "tip_speed_max_mm_s": trial.telemetry.tip_speed_max_mm_s,
+                "tip_speed_mean_mm_s": trial.telemetry.tip_speed_mean_mm_s,
+                "tip_total_distance_mm": trial.telemetry.tip_total_distance_mm,
+                "metric_version": "v2_normal_component",
+                "force_available_for_score": bool(
+                    forces is not None and forces.available_for_score
+                ),
+                "wire_force_magnitude_instant_N": (
+                    None if forces is None else forces.wire_force_magnitude_instant_N
+                ),
+                "wire_force_magnitude_trial_max_N": (
+                    None if forces is None else forces.wire_force_magnitude_trial_max_N
+                ),
+                "wire_force_magnitude_trial_mean_N": (
+                    None if forces is None else forces.wire_force_magnitude_trial_mean_N
+                ),
+                "wire_force_normal_instant_N": (
+                    None if forces is None else forces.wire_force_normal_instant_N
+                ),
+                "wire_force_normal_trial_max_N": (
+                    None if forces is None else forces.wire_force_normal_trial_max_N
+                ),
+                "wire_force_normal_trial_mean_N": (
+                    None if forces is None else forces.wire_force_normal_trial_mean_N
+                ),
+                "tip_force_magnitude_instant_N": (
+                    None if forces is None else forces.tip_force_magnitude_instant_N
+                ),
+                "tip_force_magnitude_trial_max_N": (
+                    None if forces is None else forces.tip_force_magnitude_trial_max_N
+                ),
+                "tip_force_magnitude_trial_mean_N": (
+                    None if forces is None else forces.tip_force_magnitude_trial_mean_N
+                ),
+                "tip_force_normal_instant_N": (
+                    None if forces is None else forces.tip_force_normal_instant_N
+                ),
+                "tip_force_normal_trial_max_N": (
+                    None if forces is None else forces.tip_force_normal_trial_max_N
+                ),
+                "tip_force_normal_trial_mean_N": (
+                    None if forces is None else forces.tip_force_normal_trial_mean_N
+                ),
+                "tip_length_mm": float(tip_length_mm),
+                "tip_acc_p95": trial.telemetry.tip_acc_p95,
+                "tip_acc_max": trial.telemetry.tip_acc_max,
+                "tip_jerk_p95": trial.telemetry.tip_jerk_p95,
+                "tip_jerk_max": trial.telemetry.tip_jerk_max,
+                "score_success": float(trial.score.success),
+                "score_efficiency": float(trial.score.efficiency),
+                "score_safety": (
+                    None if trial.score.safety is None else float(trial.score.safety)
+                ),
+                "score_smoothness": (
+                    None
+                    if trial.score.smoothness is None
+                    else float(trial.score.smoothness)
+                ),
+                "score_total": float(trial.score.total),
+                "trace_h5_path": (
+                    None
+                    if trial.artifacts.trace_h5_path is None
+                    else str(trial.artifacts.trace_h5_path)
+                ),
+            }
+        )
+    return tuple(rows)
+
+
+def _write_trials_h5(path: Path, rows: Tuple[dict[str, Any], ...]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    string_dtype = h5py.string_dtype(encoding="utf-8")
+    columns = (
+        "metric_version",
+        "scenario_name",
+        "candidate_name",
+        "execution_wire",
+        "trained_on_wire",
+        "trial_index",
+        "env_seed",
+        "policy_seed",
+        "success",
+        "valid_for_ranking",
+        "force_within_safety_threshold",
+        "steps_total",
+        "steps_to_success",
+        "end_reason",
+        "max_episode_steps",
+        "episode_reward",
+        "sim_time_s",
+        "wall_time_s",
+        "tip_speed_max_mm_s",
+        "tip_speed_mean_mm_s",
+        "tip_total_distance_mm",
+        "wire_force_magnitude_instant_N",
+        "wire_force_magnitude_trial_max_N",
+        "wire_force_magnitude_trial_mean_N",
+        "wire_force_normal_instant_N",
+        "wire_force_normal_trial_max_N",
+        "wire_force_normal_trial_mean_N",
+        "tip_force_magnitude_instant_N",
+        "tip_force_magnitude_trial_max_N",
+        "tip_force_magnitude_trial_mean_N",
+        "tip_force_normal_instant_N",
+        "tip_force_normal_trial_max_N",
+        "tip_force_normal_trial_mean_N",
+        "force_available_for_score",
+        "tip_length_mm",
+        "tip_acc_p95",
+        "tip_acc_max",
+        "tip_jerk_p95",
+        "tip_jerk_max",
+        "score_success",
+        "score_efficiency",
+        "score_safety",
+        "score_smoothness",
+        "score_total",
+        "trace_h5_path",
+    )
+    with h5py.File(path, "w") as handle:
+        handle.attrs["schema_version"] = 1
+        handle.attrs["metric_version"] = "v2_normal_component"
+        group = handle.create_group("trials")
+        for column in columns:
+            values = [row.get(column) for row in rows]
+            if column in {
+                "metric_version",
+                "scenario_name",
+                "candidate_name",
+                "execution_wire",
+                "trained_on_wire",
+                "end_reason",
+                "trace_h5_path",
+            }:
+                group.create_dataset(
+                    column,
+                    data=np.asarray(
+                        ["" if value is None else str(value) for value in values],
+                        dtype=object,
+                    ),
+                    dtype=string_dtype,
+                )
+            elif column in {
+                "success",
+                "valid_for_ranking",
+                "force_within_safety_threshold",
+                "force_available_for_score",
+            }:
+                group.create_dataset(
+                    column,
+                    data=np.asarray([bool(value) for value in values], dtype=np.bool_),
+                )
+            elif column in {
+                "trial_index",
+                "env_seed",
+                "steps_total",
+                "max_episode_steps",
+            }:
+                group.create_dataset(
+                    column,
+                    data=np.asarray([int(value) for value in values], dtype=np.int64),
+                )
+            elif column in {"policy_seed", "steps_to_success"}:
+                group.create_dataset(
+                    column,
+                    data=np.asarray(
+                        [
+                            np.nan if value is None else float(value)
+                            for value in values
+                        ],
+                        dtype=np.float64,
+                    ),
+                )
+            else:
+                group.create_dataset(
+                    column,
+                    data=np.asarray(
+                        [
+                            np.nan if value is None else float(value)
+                            for value in values
+                        ],
+                        dtype=np.float64,
+                    ),
+                )
+
+
 def _write_report_artifacts(
     *,
     job: EvaluationJob,
@@ -97,78 +547,102 @@ def _write_report_artifacts(
     output_dir = (
         report.artifacts.output_dir
         if report.artifacts is not None
-        else job.output_root / job.name
+        else _job_output_dir(
+            output_root=job.output_root,
+            job_name=job.name,
+            generated_at=report.generated_at,
+        )
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    summary_csv_path = output_dir / "summary.csv"
-    report_json_path = output_dir / "report.json"
+    candidate_summaries_csv_path = output_dir / "candidate_summaries.csv"
+    candidate_summaries_json_path = output_dir / "candidate_summaries.json"
+    manifest_json_path = output_dir / "manifest.json"
+    trials_h5_path = output_dir / "trials.h5"
     report_markdown_path = output_dir / "report.md"
 
-    summary_fieldnames = [
-        "scenario_name",
-        "candidate_name",
-        "execution_wire",
-        "trained_on_wire",
-        "trial_count",
-        "success_rate",
-        "score_mean",
-        "score_std",
-        "steps_total_mean",
-        "steps_to_success_mean",
-        "tip_speed_max_mean_mm_s",
-        "wall_force_max_mean",
-        "wall_force_max_mean_newton",
-        "force_available_rate",
-    ]
-    with summary_csv_path.open("w", encoding="utf-8", newline="") as handle:
+    summary_fieldnames = list(_summary_row(report.summaries[0]).keys()) if report.summaries else []
+    with candidate_summaries_csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=summary_fieldnames)
         writer.writeheader()
         for summary in report.summaries:
-            writer.writerow(
-                {
-                    "scenario_name": summary.scenario_name,
-                    "candidate_name": summary.candidate_name,
-                    "execution_wire": summary.execution_wire.tool_ref,
-                    "trained_on_wire": (
-                        summary.trained_on_wire.tool_ref
-                        if summary.trained_on_wire is not None
-                        else ""
-                    ),
-                    "trial_count": summary.trial_count,
-                    "success_rate": summary.success_rate,
-                    "score_mean": summary.score_mean,
-                    "score_std": summary.score_std,
-                    "steps_total_mean": summary.steps_total_mean,
-                    "steps_to_success_mean": summary.steps_to_success_mean,
-                    "tip_speed_max_mean_mm_s": summary.tip_speed_max_mean_mm_s,
-                    "wall_force_max_mean": summary.wall_force_max_mean,
-                    "wall_force_max_mean_newton": summary.wall_force_max_mean_newton,
-                    "force_available_rate": summary.force_available_rate,
-                }
-            )
+            writer.writerow(_summary_row(summary))
 
-    with report_json_path.open("w", encoding="utf-8") as handle:
-        archive_metadata = {
-            "anatomy": ", ".join(scenario.name for scenario in job.scenarios),
+    candidate_summaries_json_path.write_text(
+        json.dumps([_summary_row(summary) for summary in report.summaries], indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    trial_rows = _trial_rows(
+        report.trials,
+        max_episode_steps=job.execution.max_episode_steps,
+        tip_length_mm=job.scoring.force.tip_length_mm,
+    )
+    _write_trials_h5(trials_h5_path, trial_rows)
+
+    with manifest_json_path.open("w", encoding="utf-8") as handle:
+        anatomy_metadata = [
+            {
+                "name": scenario.name,
+                "record_id": scenario.anatomy.record_id,
+                "arch_type": scenario.anatomy.arch_type,
+                "seed": scenario.anatomy.seed,
+            }
+            for scenario in job.scenarios
+        ]
+        summary_stats = {
+            "success_rate_mean": _finite_mean(tuple(summary.success_rate for summary in report.summaries)),
+            "candidate_score_final_mean": _finite_mean(tuple(summary.candidate_score_final for summary in report.summaries)),
+            "valid_rate_mean": _finite_mean(tuple(summary.valid_rate for summary in report.summaries)),
+        }
+        payload = {
+            "schema_version": 1,
+            "metric_version": "v2_normal_component",
+            "job_name": report.job_name,
+            "generated_time": report.generated_at,
+            "anatomy_metadata": anatomy_metadata,
+            "targets": [_jsonable(scenario.target) for scenario in job.scenarios],
+            "wires": [_jsonable(candidate.execution_wire) for candidate in job.candidates],
+            "candidates": [_jsonable(candidate) for candidate in job.candidates],
+            "execution_plan": _jsonable(job.execution),
+            "seed_schedule": [
+                {
+                    "trial_index": index,
+                    "env_seed": env_seed,
+                    "policy_seed": policy_seed,
+                }
+                for index, (env_seed, policy_seed) in enumerate(job.execution.trial_seed_pairs)
+            ],
+            "counts": {
+                "n_candidates": len(job.candidates),
+                "n_trials_total": len(report.trials),
+            },
+            "artifact_paths": {
+                "candidate_summaries_csv": str(candidate_summaries_csv_path),
+                "candidate_summaries_json": str(candidate_summaries_json_path),
+                "trials_h5": str(trials_h5_path),
+                "traces_dir": str(output_dir / "traces"),
+                "meshes_dir": str(output_dir / "meshes"),
+                "report_md": str(report_markdown_path),
+            },
+            "scoring_spec": _scoring_spec_payload(job.scoring),
+            "summary_stats": summary_stats,
+            "summaries": [_summary_row(summary) for summary in report.summaries],
             "tested_wires": sorted(
                 {candidate.execution_wire.tool_ref for candidate in job.candidates}
             ),
-            "output_dir": str(output_dir),
         }
-        payload = _jsonable(report)
-        payload["archive_metadata"] = archive_metadata
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
     lines = [
         f"# {report.job_name}",
         "",
-        f"Generated at: {report.generated_at}",
-        f"Output dir: {output_dir}",
-        f"Trials: {len(report.trials)}",
-        f"Summaries: {len(report.summaries)}",
-        "",
+                f"Generated at: {report.generated_at}",
+                f"Output dir: {output_dir}",
+                f"Trials: {len(report.trials)}",
+                f"Summaries: {len(report.summaries)}",
+                "",
     ]
     for summary in report.summaries:
         lines.extend(
@@ -178,7 +652,8 @@ def _write_report_artifacts(
                 f"- trained on: {summary.trained_on_wire.tool_ref if summary.trained_on_wire is not None else 'unknown'}",
                 f"- trials: {summary.trial_count}",
                 f"- success rate: {summary.success_rate if summary.success_rate is not None else 'n/a'}",
-                f"- score mean: {summary.score_mean if summary.score_mean is not None else 'n/a'}",
+                f"- valid rate: {summary.valid_rate if summary.valid_rate is not None else 'n/a'}",
+                f"- candidate score: {summary.candidate_score_final if summary.candidate_score_final is not None else 'n/a'}",
                 "",
             ]
         )
@@ -186,19 +661,49 @@ def _write_report_artifacts(
 
     return EvaluationArtifacts(
         output_dir=output_dir,
-        summary_csv_path=summary_csv_path,
-        report_json_path=report_json_path,
+        candidate_summaries_csv_path=candidate_summaries_csv_path,
+        candidate_summaries_json_path=candidate_summaries_json_path,
+        manifest_json_path=manifest_json_path,
+        trials_h5_path=trials_h5_path,
         report_markdown_path=report_markdown_path,
+        traces_dir=output_dir / "traces",
+        meshes_dir=output_dir / "meshes",
     )
 
 
-def summarize_trials(trials: Tuple[TrialResult, ...]) -> CandidateSummary:
+def summarize_trials(
+    trials: Tuple[TrialResult, ...],
+    *,
+    scoring: ScoringSpec,
+) -> CandidateSummary:
     """Aggregate all trials for one candidate/scenario pair."""
 
     if not trials:
         raise ValueError("trials must not be empty")
 
     first = trials[0]
+    valid_soft_scores = tuple(
+        soft_score_total(breakdown=trial.score, scoring=scoring)
+        if trial.valid_for_ranking
+        else None
+        for trial in trials
+    )
+    valid_rate = _finite_mean(
+        tuple(1.0 if trial.valid_for_ranking else 0.0 for trial in trials)
+    )
+    soft_score_mean_valid = _finite_mean(valid_soft_scores)
+    soft_score_std_valid = _finite_std(valid_soft_scores)
+    n_valid = sum(1 for trial in trials if trial.valid_for_ranking)
+    if n_valid == 0 or soft_score_mean_valid is None:
+        candidate_score_final = 0.0
+    else:
+        sigma = 0.0 if soft_score_std_valid is None else float(soft_score_std_valid)
+        p_w = 0.0 if valid_rate is None else float(valid_rate)
+        candidate_score_final = (p_w ** float(scoring.candidate_score.lambda_)) * max(
+            0.0,
+            float(soft_score_mean_valid) - float(scoring.candidate_score.beta) * sigma,
+        )
+
     return CandidateSummary(
         scenario_name=first.scenario_name,
         candidate_name=first.candidate_name,
@@ -208,6 +713,10 @@ def summarize_trials(trials: Tuple[TrialResult, ...]) -> CandidateSummary:
         success_rate=_finite_mean(
             tuple(1.0 if trial.telemetry.success else 0.0 for trial in trials)
         ),
+        valid_rate=valid_rate,
+        soft_score_mean_valid=soft_score_mean_valid,
+        soft_score_std_valid=soft_score_std_valid,
+        candidate_score_final=candidate_score_final,
         score_mean=_finite_mean(tuple(trial.score.total for trial in trials)),
         score_std=_finite_std(tuple(trial.score.total for trial in trials)),
         steps_total_mean=_finite_mean(
@@ -215,36 +724,34 @@ def summarize_trials(trials: Tuple[TrialResult, ...]) -> CandidateSummary:
         ),
         steps_to_success_mean=_finite_mean(
             tuple(
-                None
-                if trial.telemetry.steps_to_success is None
-                else float(trial.telemetry.steps_to_success)
+                (
+                    None
+                    if trial.telemetry.steps_to_success is None
+                    else float(trial.telemetry.steps_to_success)
+                )
                 for trial in trials
             )
         ),
         tip_speed_max_mean_mm_s=_finite_mean(
             tuple(trial.telemetry.tip_speed_max_mm_s for trial in trials)
         ),
-        wall_force_max_mean=_finite_mean(
+        wire_force_normal_trial_max_mean_N=_finite_mean(
             tuple(
-                None
-                if trial.telemetry.forces is None
-                else trial.telemetry.forces.total_force_norm_max
-                for trial in trials
-            )
-        ),
-        wall_force_max_mean_newton=_finite_mean(
-            tuple(
-                None
-                if trial.telemetry.forces is None
-                else trial.telemetry.forces.total_force_norm_max_newton
+                (
+                    None
+                    if trial.telemetry.forces is None
+                    else trial.telemetry.forces.wire_force_normal_trial_max_N
+                )
                 for trial in trials
             )
         ),
         force_available_rate=_finite_mean(
             tuple(
-                None
-                if trial.telemetry.forces is None
-                else 1.0 if trial.telemetry.forces.available_for_score else 0.0
+                (
+                    None
+                    if trial.telemetry.forces is None
+                    else 1.0 if trial.telemetry.forces.available_for_score else 0.0
+                )
                 for trial in trials
             )
         ),
@@ -258,6 +765,8 @@ class AnatomyDiscoveryPort(Protocol):
         self,
         *,
         registry_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
     ) -> Tuple[AorticArchAnatomy, ...]:
         """Return all discoverable anatomies from the configured registry file."""
 
@@ -336,6 +845,8 @@ class EvaluationService(ABC):
         self,
         *,
         registry_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
     ) -> Tuple[AorticArchAnatomy, ...]:
         """Return discoverable anatomies as resolved domain models."""
 
@@ -442,11 +953,11 @@ class ExplicitPolicyDiscoveryPort(Protocol):
         *,
         output_root: Path = Path("results/eval_runs"),
     ) -> Tuple[HistoricalReportSummary, ...]:
-        """Return lightweight metadata for persisted reports."""
+        """Return lightweight metadata for persisted manifests."""
 
     @abstractmethod
-    def load_report_from_disk(self, report_json_path: Path) -> EvaluationReport:
-        """Load one full persisted report from disk."""
+    def load_manifest_from_disk(self, manifest_json_path: Path) -> EvaluationReport:
+        """Load one full persisted evaluation run from disk."""
 
     @abstractmethod
     def save_clinical_feedback(
@@ -465,13 +976,19 @@ class LocalEvaluationRunner:
         self,
         *,
         registry_path: Path = DEFAULT_WIRE_REGISTRY_PATH,
-        runtime_factory: Callable[..., PreparedEvaluationRuntime] = prepare_evaluation_runtime,
+        runtime_factory: Callable[
+            ..., PreparedEvaluationRuntime
+        ] = prepare_evaluation_runtime,
         trial_runner: Callable[..., TrialResult] = run_single_trial,
+        parallel_task_runner: Callable[
+            ..., Tuple[_ParallelTrialOutcome, ...]
+        ] = _run_parallel_trial_tasks_process,
         generated_at_factory: Callable[[], str] = _generated_at_utc,
     ) -> None:
         self._registry_path = Path(registry_path)
         self._runtime_factory = runtime_factory
         self._trial_runner = trial_runner
+        self._parallel_task_runner = parallel_task_runner
         self._generated_at_factory = generated_at_factory
 
     def run_evaluation_job(
@@ -481,13 +998,109 @@ class LocalEvaluationRunner:
         frame_callback: Optional[Callable[[np.ndarray], None]] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> EvaluationReport:
-        trials: list[TrialResult] = []
+        generated_at = self._generated_at_factory()
+        output_dir = (
+            Path(job.resume_output_dir)
+            if job.resume_output_dir is not None
+            else _job_output_dir(
+                output_root=job.output_root,
+                job_name=job.name,
+                generated_at=generated_at,
+            )
+        )
+        pre_write_meshes_for_job(job, output_dir)
+        trials: list[TrialResult] = list(self._load_resume_trials_if_available(output_dir))
+        completed_trial_keys = self._completed_trial_keys(trials)
+        if progress_callback is not None and trials:
+            progress_callback(
+                f"resume_loaded completed_trials={len(trials)} output_dir={output_dir}"
+            )
+        worker_count = max(1, int(job.execution.worker_count))
+        use_parallel = (
+            worker_count > 1
+            and not job.execution.visualization.enabled
+            and frame_callback is None
+            and self._runtime_factory is prepare_evaluation_runtime
+            and self._trial_runner is run_single_trial
+        )
+        if worker_count > 1 and job.execution.visualization.enabled:
+            raise ValueError("worker_count > 1 is only supported for headless runs")
+        if use_parallel and str(job.execution.policy_device).lower() != "cpu":
+            raise ValueError("parallel eval_v2 workers require policy_device='cpu'")
+        if use_parallel:
+            return self._run_evaluation_job_parallel(
+                job,
+                generated_at=generated_at,
+                output_dir=output_dir,
+                worker_count=worker_count,
+                existing_trials=tuple(trials),
+                completed_trial_keys=completed_trial_keys,
+                progress_callback=progress_callback,
+            )
+
+        isolate_headless_trials = (
+            not job.execution.visualization.enabled
+            and frame_callback is None
+            and self._runtime_factory is prepare_evaluation_runtime
+            and self._trial_runner is run_single_trial
+        )
         for scenario in job.scenarios:
             for candidate in job.candidates:
+                if isolate_headless_trials:
+                    for trial_index, (seed, _policy_seed) in enumerate(
+                        job.execution.trial_seed_pairs
+                    ):
+                        trial_key = self._trial_identity(
+                            scenario_name=scenario.name,
+                            candidate_name=candidate.name,
+                            execution_wire=candidate.execution_wire.tool_ref,
+                            trial_index=trial_index,
+                        )
+                        if trial_key in completed_trial_keys:
+                            continue
+                        if progress_callback is not None:
+                            progress_callback(
+                                "runtime_prepare "
+                                f"scenario={scenario.name} candidate={candidate.name} "
+                                f"trial_index={trial_index}"
+                            )
+                        if str(job.execution.policy_device).lower() == "cpu":
+                            configure_cpu_eval_threads(1)
+                        runtime = self._runtime_factory(
+                            candidate=candidate,
+                            scenario=scenario,
+                            registry_path=self._registry_path,
+                            policy_device=job.execution.policy_device,
+                        )
+                        try:
+                            trial = self._trial_runner(
+                                runtime=runtime,
+                                trial_index=trial_index,
+                                seed=seed,
+                                execution=job.execution,
+                                scoring=job.scoring,
+                                output_dir=output_dir,
+                                frame_callback=frame_callback,
+                                progress_callback=progress_callback,
+                            )
+                            trials.append(trial)
+                            completed_trial_keys.add(trial_key)
+                            self._persist_partial_trials(
+                                output_dir=output_dir,
+                                trials=tuple(trials),
+                                job=job,
+                            )
+                        finally:
+                            _maybe_close(runtime.play_policy)
+                            _maybe_close(runtime.intervention)
+                    continue
+
                 if progress_callback is not None:
                     progress_callback(
                         f"runtime_prepare scenario={scenario.name} candidate={candidate.name}"
                     )
+                if str(job.execution.policy_device).lower() == "cpu":
+                    configure_cpu_eval_threads(1)
                 runtime = self._runtime_factory(
                     candidate=candidate,
                     scenario=scenario,
@@ -495,21 +1108,39 @@ class LocalEvaluationRunner:
                     policy_device=job.execution.policy_device,
                 )
                 try:
-                    for trial_index, seed in enumerate(job.execution.seeds):
+                    for trial_index, (seed, _policy_seed) in enumerate(
+                        job.execution.trial_seed_pairs
+                    ):
+                        trial_key = self._trial_identity(
+                            scenario_name=scenario.name,
+                            candidate_name=candidate.name,
+                            execution_wire=candidate.execution_wire.tool_ref,
+                            trial_index=trial_index,
+                        )
+                        if trial_key in completed_trial_keys:
+                            continue
                         trial = self._trial_runner(
                             runtime=runtime,
                             trial_index=trial_index,
                             seed=seed,
                             execution=job.execution,
                             scoring=job.scoring,
+                            output_dir=output_dir,
                             frame_callback=frame_callback,
                             progress_callback=progress_callback,
                         )
                         trials.append(trial)
+                        completed_trial_keys.add(trial_key)
+                        self._persist_partial_trials(
+                            output_dir=output_dir,
+                            trials=tuple(trials),
+                            job=job,
+                        )
                 finally:
                     _maybe_close(runtime.play_policy)
                     _maybe_close(runtime.intervention)
 
+        trials = self._sorted_trials(tuple(trials))
         summaries = tuple(
             summarize_trials(
                 tuple(
@@ -518,17 +1149,221 @@ class LocalEvaluationRunner:
                     if trial.scenario_name == scenario.name
                     and trial.candidate_name == candidate.name
                     and trial.execution_wire == candidate.execution_wire
-                )
+                ),
+                scoring=job.scoring,
             )
             for scenario in job.scenarios
             for candidate in job.candidates
         )
         return EvaluationReport(
             job_name=job.name,
-            generated_at=self._generated_at_factory(),
+            generated_at=generated_at,
             summaries=summaries,
             trials=tuple(trials),
-            artifacts=EvaluationArtifacts(output_dir=job.output_root / job.name),
+            execution_plan=job.execution,
+            scoring_spec=job.scoring,
+            artifacts=EvaluationArtifacts(output_dir=output_dir),
+        )
+
+    def _run_evaluation_job_parallel(
+        self,
+        job: EvaluationJob,
+        *,
+        generated_at: str,
+        output_dir: Path,
+            worker_count: int,
+        existing_trials: Tuple[TrialResult, ...],
+        completed_trial_keys: set[tuple[str, str, str, int]],
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> EvaluationReport:
+        trials: list[TrialResult] = list(existing_trials)
+
+        tasks = tuple(
+            _ParallelTrialTask(
+                scenario_index=scenario_index,
+                candidate_index=candidate_index,
+                trial_index=trial_index,
+                seed=seed,
+                policy_seed=policy_seed,
+                scenario=scenario,
+                candidate=candidate,
+                execution=job.execution,
+                scoring=job.scoring,
+                registry_path=self._registry_path,
+                policy_device=job.execution.policy_device,
+                output_dir=output_dir,
+            )
+            for scenario_index, scenario in enumerate(job.scenarios)
+            for candidate_index, candidate in enumerate(job.candidates)
+            for trial_index, (seed, policy_seed) in enumerate(
+                job.execution.trial_seed_pairs
+            )
+            if self._trial_identity(
+                scenario_name=scenario.name,
+                candidate_name=candidate.name,
+                execution_wire=candidate.execution_wire.tool_ref,
+                trial_index=trial_index,
+            )
+            not in completed_trial_keys
+        )
+        outcomes, used_outcome_callback = self._invoke_parallel_task_runner(
+            tasks,
+            worker_count=worker_count,
+            progress_callback=progress_callback,
+            outcome_callback=lambda outcome: self._handle_parallel_outcome(
+                outcome=outcome,
+                trials=trials,
+                completed_trial_keys=completed_trial_keys,
+                output_dir=output_dir,
+                job=job,
+            ),
+        )
+        outcomes = tuple(
+            sorted(
+                outcomes,
+                key=lambda item: (
+                    item.scenario_index,
+                    item.candidate_index,
+                    item.trial_index,
+                ),
+            )
+        )
+        if not used_outcome_callback:
+            trials.extend(outcome.trial for outcome in outcomes)
+        trials = list(self._sorted_trials(tuple(trials)))
+        summaries = tuple(
+            summarize_trials(
+                tuple(
+                    trial
+                    for trial in trials
+                    if trial.scenario_name == scenario.name
+                    and trial.candidate_name == candidate.name
+                    and trial.execution_wire == candidate.execution_wire
+                ),
+                scoring=job.scoring,
+            )
+            for scenario in job.scenarios
+            for candidate in job.candidates
+        )
+        return EvaluationReport(
+            job_name=job.name,
+            generated_at=generated_at,
+            summaries=summaries,
+            trials=trials,
+            execution_plan=job.execution,
+            scoring_spec=job.scoring,
+            artifacts=EvaluationArtifacts(output_dir=output_dir),
+        )
+
+    def _invoke_parallel_task_runner(
+        self,
+        tasks: Sequence[_ParallelTrialTask],
+        *,
+        worker_count: int,
+        progress_callback: Optional[Callable[[str], None]],
+        outcome_callback: Callable[[_ParallelTrialOutcome], None],
+    ) -> tuple[Tuple[_ParallelTrialOutcome, ...], bool]:
+        kwargs = {
+            "worker_count": worker_count,
+            "progress_callback": progress_callback,
+        }
+        used_outcome_callback = False
+        try:
+            signature = inspect.signature(self._parallel_task_runner)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None and "outcome_callback" in signature.parameters:
+            kwargs["outcome_callback"] = outcome_callback
+            used_outcome_callback = True
+        return self._parallel_task_runner(tasks, **kwargs), used_outcome_callback
+
+    @staticmethod
+    def _trial_identity(
+        *,
+        scenario_name: str,
+        candidate_name: str,
+        execution_wire: str,
+        trial_index: int,
+    ) -> tuple[str, str, str, int]:
+        return (
+            str(scenario_name),
+            str(candidate_name),
+            str(execution_wire),
+            int(trial_index),
+        )
+
+    def _completed_trial_keys(
+        self, trials: Sequence[TrialResult]
+    ) -> set[tuple[str, str, str, int]]:
+        return {
+            self._trial_identity(
+                scenario_name=trial.scenario_name,
+                candidate_name=trial.candidate_name,
+                execution_wire=trial.execution_wire.tool_ref,
+                trial_index=trial.trial_index,
+            )
+            for trial in trials
+        }
+
+    @staticmethod
+    def _sorted_trials(trials: Tuple[TrialResult, ...]) -> Tuple[TrialResult, ...]:
+        return tuple(
+            sorted(
+                trials,
+                key=lambda trial: (
+                    trial.scenario_name,
+                    trial.candidate_name,
+                    trial.execution_wire.tool_ref,
+                    trial.trial_index,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_resume_trials_if_available(output_dir: Path) -> Tuple[TrialResult, ...]:
+        trials_h5_path = Path(output_dir) / "trials.h5"
+        if not trials_h5_path.exists():
+            return ()
+        return _load_trials_from_h5(trials_h5_path)
+
+    @staticmethod
+    def _persist_partial_trials(
+        *,
+        output_dir: Path,
+        trials: Tuple[TrialResult, ...],
+        job: EvaluationJob,
+    ) -> None:
+        trial_rows = _trial_rows(
+            trials,
+            max_episode_steps=job.execution.max_episode_steps,
+            tip_length_mm=job.scoring.force.tip_length_mm,
+        )
+        _write_trials_h5(Path(output_dir) / "trials.h5", trial_rows)
+
+    def _handle_parallel_outcome(
+        self,
+        *,
+        outcome: _ParallelTrialOutcome,
+        trials: list[TrialResult],
+        completed_trial_keys: set[tuple[str, str, str, int]],
+        output_dir: Path,
+        job: EvaluationJob,
+    ) -> None:
+        trial = outcome.trial
+        trial_key = self._trial_identity(
+            scenario_name=trial.scenario_name,
+            candidate_name=trial.candidate_name,
+            execution_wire=trial.execution_wire.tool_ref,
+            trial_index=trial.trial_index,
+        )
+        if trial_key in completed_trial_keys:
+            return
+        trials.append(trial)
+        completed_trial_keys.add(trial_key)
+        self._persist_partial_trials(
+            output_dir=output_dir,
+            trials=tuple(trials),
+            job=job,
         )
 
 
@@ -556,8 +1391,14 @@ class DefaultEvaluationService(EvaluationService):
         self,
         *,
         registry_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
     ) -> Tuple[AorticArchAnatomy, ...]:
-        return self._anatomy_discovery.list_anatomies(registry_path=registry_path)
+        return self._anatomy_discovery.list_anatomies(
+            registry_path=registry_path,
+            limit=limit,
+            random_sample=random_sample,
+        )
 
     def get_anatomy(
         self,
@@ -654,7 +1495,8 @@ class DefaultEvaluationService(EvaluationService):
             policies = tuple(
                 policy
                 for policy in policies
-                if policy.trained_on_wire is None or policy.trained_on_wire == execution_wire
+                if policy.trained_on_wire is None
+                or policy.trained_on_wire == execution_wire
             )
 
         candidates: list[EvaluationCandidate] = []
@@ -698,23 +1540,31 @@ class DefaultEvaluationService(EvaluationService):
             return ()
 
         summaries: list[HistoricalReportSummary] = []
-        for report_json in sorted(root.rglob("report.json")):
+        for manifest_json in sorted(root.rglob("manifest.json")):
             try:
-                payload = _read_json_file(report_json)
+                payload = _read_json_file(manifest_json)
             except Exception:
                 continue
             if not isinstance(payload, dict):
                 continue
 
-            archive_metadata = payload.get("archive_metadata", {})
-            if not isinstance(archive_metadata, dict):
-                archive_metadata = {}
+            anatomy_metadata = payload.get("anatomy_metadata", ())
+            anatomy = "unknown"
+            if isinstance(anatomy_metadata, list) and anatomy_metadata:
+                anatomy = ", ".join(
+                    str(item.get("record_id") or item.get("name") or "unknown")
+                    for item in anatomy_metadata
+                    if isinstance(item, dict)
+                ) or "unknown"
 
-            job_name = str(payload.get("job_name", report_json.parent.name))
-            generated_at = str(payload.get("generated_at", ""))
-            anatomy = str(archive_metadata.get("anatomy", "unknown"))
-            tested_wires_raw = archive_metadata.get("tested_wires", ())
-            tested_wires = tuple(str(wire) for wire in tested_wires_raw) if isinstance(tested_wires_raw, list) else ()
+            job_name = str(payload.get("job_name", manifest_json.parent.name))
+            generated_at = str(payload.get("generated_time", ""))
+            tested_wires_raw = payload.get("tested_wires", ())
+            tested_wires = (
+                tuple(str(wire) for wire in tested_wires_raw)
+                if isinstance(tested_wires_raw, list)
+                else ()
+            )
 
             summaries.append(
                 HistoricalReportSummary(
@@ -722,56 +1572,61 @@ class DefaultEvaluationService(EvaluationService):
                     generated_at=generated_at,
                     anatomy=anatomy,
                     tested_wires=tested_wires,
-                    report_json_path=report_json,
-                    output_dir=report_json.parent,
+                    manifest_json_path=manifest_json,
+                    output_dir=manifest_json.parent,
                 )
             )
 
         summaries.sort(key=lambda summary: summary.generated_at, reverse=True)
         return tuple(summaries)
 
-    def load_report_from_disk(self, report_json_path: Path) -> EvaluationReport:
-        payload = _read_json_file(Path(report_json_path))
+    def load_manifest_from_disk(self, manifest_json_path: Path) -> EvaluationReport:
+        payload = _read_json_file(Path(manifest_json_path))
         if not isinstance(payload, dict):
-            raise TypeError("report.json payload must be an object")
+            raise TypeError("manifest.json payload must be an object")
 
-        summaries = tuple(
-            CandidateSummary(
-                scenario_name=str(item["scenario_name"]),
-                candidate_name=str(item["candidate_name"]),
-                execution_wire=_parse_wire_ref(item["execution_wire"]),
-                trained_on_wire=(
-                    _parse_wire_ref(item["trained_on_wire"])
-                    if item.get("trained_on_wire")
-                    else None
-                ),
-                trial_count=int(item["trial_count"]),
-                success_rate=_to_optional_float(item.get("success_rate")),
-                score_mean=_to_optional_float(item.get("score_mean")),
-                score_std=_to_optional_float(item.get("score_std")),
-                steps_total_mean=_to_optional_float(item.get("steps_total_mean")),
-                steps_to_success_mean=_to_optional_float(item.get("steps_to_success_mean")),
-                tip_speed_max_mean_mm_s=_to_optional_float(item.get("tip_speed_max_mean_mm_s")),
-                wall_force_max_mean=_to_optional_float(item.get("wall_force_max_mean")),
-                wall_force_max_mean_newton=_to_optional_float(item.get("wall_force_max_mean_newton")),
-                force_available_rate=_to_optional_float(item.get("force_available_rate")),
-            )
-            for item in payload.get("summaries", ())
+        summaries = tuple(_parse_candidate_summary(item) for item in payload.get("summaries", ()))
+        artifact_paths = payload.get("artifact_paths", {})
+        if not isinstance(artifact_paths, dict):
+            artifact_paths = {}
+        trials_h5_path = Path(
+            artifact_paths.get("trials_h5", Path(manifest_json_path).parent / "trials.h5")
         )
-
-        trials = tuple(_parse_trial_result(item) for item in payload.get("trials", ()))
+        trials = _load_trials_from_h5(trials_h5_path)
 
         artifacts = EvaluationArtifacts(
-            output_dir=Path(report_json_path).parent,
-            summary_csv_path=Path(report_json_path).parent / "summary.csv",
-            report_json_path=Path(report_json_path),
-            report_markdown_path=Path(report_json_path).parent / "report.md",
+            output_dir=Path(manifest_json_path).parent,
+            candidate_summaries_csv_path=Path(
+                artifact_paths.get(
+                    "candidate_summaries_csv",
+                    Path(manifest_json_path).parent / "candidate_summaries.csv",
+                )
+            ),
+            candidate_summaries_json_path=Path(
+                artifact_paths.get(
+                    "candidate_summaries_json",
+                    Path(manifest_json_path).parent / "candidate_summaries.json",
+                )
+            ),
+            manifest_json_path=Path(manifest_json_path),
+            trials_h5_path=trials_h5_path,
+            report_markdown_path=Path(
+                artifact_paths.get("report_md", Path(manifest_json_path).parent / "report.md")
+            ),
+            traces_dir=Path(
+                artifact_paths.get("traces_dir", Path(manifest_json_path).parent / "traces")
+            ),
+            meshes_dir=Path(
+                artifact_paths.get("meshes_dir", Path(manifest_json_path).parent / "meshes")
+            ),
         )
         return EvaluationReport(
-            job_name=str(payload.get("job_name", Path(report_json_path).parent.name)),
-            generated_at=str(payload.get("generated_at", "")),
+            job_name=str(payload.get("job_name", Path(manifest_json_path).parent.name)),
+            generated_at=str(payload.get("generated_time", "")),
             summaries=summaries,
             trials=trials,
+            execution_plan=_parse_execution_plan(payload.get("execution_plan", {})),
+            scoring_spec=_parse_scoring_spec(payload.get("scoring_spec", {})),
             artifacts=artifacts,
         )
 
@@ -800,7 +1655,9 @@ class DefaultEvaluationService(EvaluationService):
         trained_on_wire = policy.trained_on_wire
         if trained_on_wire is None or trained_on_wire == execution_wire:
             return policy.name
-        return f"{policy.name} [{trained_on_wire.tool_ref} -> {execution_wire.tool_ref}]"
+        return (
+            f"{policy.name} [{trained_on_wire.tool_ref} -> {execution_wire.tool_ref}]"
+        )
 
 
 __all__ = [
@@ -819,12 +1676,24 @@ __all__ = [
 def _to_optional_float(value: Any) -> Optional[float]:
     if value is None:
         return None
-    return float(value)
+    f = float(value)
+    return None if math.isnan(f) else f
+
+
+def _parse_vector3(value: Any) -> tuple[float, float, float]:
+    if value is None:
+        return (0.0, 0.0, 0.0)
+    items = tuple(value)
+    if len(items) != 3:
+        return (0.0, 0.0, 0.0)
+    return (float(items[0]), float(items[1]), float(items[2]))
 
 
 def _parse_wire_ref(value: Any) -> WireRef:
     if isinstance(value, dict):
-        return WireRef(model=str(value.get("model", "")), wire=str(value.get("wire", "")))
+        return WireRef(
+            model=str(value.get("model", "")), wire=str(value.get("wire", ""))
+        )
     text = str(value)
     model, wire = text.split("/", maxsplit=1)
     return WireRef(model=model, wire=wire)
@@ -840,7 +1709,184 @@ def _parse_policy_spec(payload: dict[str, Any]) -> PolicySpec:
     )
 
 
-def _parse_force_telemetry(payload: Optional[dict[str, Any]]) -> Optional[ForceTelemetrySummary]:
+def _parse_execution_plan(payload: Any) -> ExecutionPlan:
+    if not isinstance(payload, dict):
+        return ExecutionPlan()
+    visualization_payload = payload.get("visualization", {})
+    if not isinstance(visualization_payload, dict):
+        visualization_payload = {}
+    visualization = VisualizationSpec(
+        enabled=bool(visualization_payload.get("enabled", False)),
+        rendered_trials_per_candidate=int(
+            visualization_payload.get("rendered_trials_per_candidate", 1)
+        ),
+        force_debug_overlay=bool(
+            visualization_payload.get("force_debug_overlay", False)
+        ),
+        force_debug_top_k_segments=int(
+            visualization_payload.get("force_debug_top_k_segments", 5)
+        ),
+    )
+    return ExecutionPlan(
+        trials_per_candidate=int(payload.get("trials_per_candidate", 10)),
+        base_seed=int(payload.get("base_seed", 123)),
+        explicit_seeds=tuple(int(seed) for seed in payload.get("explicit_seeds", ())),
+        policy_base_seed=int(payload.get("policy_base_seed", 1000)),
+        policy_explicit_seeds=tuple(
+            int(seed) for seed in payload.get("policy_explicit_seeds", ())
+        ),
+        max_episode_steps=int(payload.get("max_episode_steps", 450)),
+        policy_device=str(payload.get("policy_device", "cuda")),
+        policy_mode=str(payload.get("policy_mode", "deterministic")),
+        stochastic_environment_mode=str(
+            payload.get("stochastic_environment_mode", "random_start")
+        ),
+        simulation_backend=str(payload.get("simulation_backend", "single_process")),
+        visualization=visualization,
+        worker_count=int(payload.get("worker_count", 1)),
+    )
+
+
+def _parse_scoring_spec(payload: Any) -> ScoringSpec:
+    if not isinstance(payload, dict):
+        return ScoringSpec()
+    trial_indicator_payload = payload.get("trial_indicator", {})
+    force_payload = payload.get("force", {})
+    safety_payload = payload.get("safety_score", {})
+    efficiency_payload = payload.get("efficiency_score", {})
+    candidate_payload = payload.get("candidate_score", {})
+    smoothness_payload = payload.get("smoothness_score", {})
+    if not isinstance(trial_indicator_payload, dict):
+        trial_indicator_payload = {}
+    if not isinstance(force_payload, dict):
+        force_payload = {}
+    if not isinstance(safety_payload, dict):
+        safety_payload = {}
+    if not isinstance(efficiency_payload, dict):
+        efficiency_payload = {}
+    if not isinstance(candidate_payload, dict):
+        candidate_payload = {}
+    if not isinstance(smoothness_payload, dict):
+        smoothness_payload = {}
+
+    return ScoringSpec(
+        mode=str(payload.get("mode", "ranking_v1")),
+        trial_indicator=TrialIndicatorSpec(
+            requires_success=bool(
+                trial_indicator_payload.get("requires_success", True)
+            ),
+            requires_steps_within_episode_limit=bool(
+                trial_indicator_payload.get(
+                    "requires_steps_within_episode_limit", True
+                )
+            ),
+            requires_force_available=bool(
+                trial_indicator_payload.get("requires_force_available", True)
+            ),
+            requires_force_within_safety_threshold=bool(
+                trial_indicator_payload.get(
+                    "requires_force_within_safety_threshold", True
+                )
+            ),
+        ),
+        force=ForceScoringSpec(
+            default_safety_force_source=str(
+                force_payload.get(
+                    "default_safety_force_source", "wire_force_normal_trial_max_N"
+                )
+            ),
+            force_max_N=float(force_payload.get("force_max_N", 2.0)),
+            tip_length_mm=float(force_payload.get("tip_length_mm", 3.0)),
+            tip_force_definition=str(
+                force_payload.get(
+                    "tip_force_definition",
+                    "maximum compressive normal contact force within distal tip region",
+                )
+            ),
+            whole_wire_force_definition=str(
+                force_payload.get(
+                    "whole_wire_force_definition",
+                    "maximum contact force norm along the entire guidewire during the trial",
+                )
+            ),
+        ),
+        safety_score=SafetyScoreSpec(
+            type=str(safety_payload.get("type", "nonlinear_product")),
+            c=float(safety_payload.get("c", 0.30)),
+            p=float(safety_payload.get("p", 2.0)),
+            k=float(safety_payload.get("k", 10.0)),
+            F50_N=float(safety_payload.get("F50_N", 1.55)),
+            F_max_N=float(safety_payload.get("F_max_N", 2.0)),
+        ),
+        efficiency_score=EfficiencyScoreSpec(
+            type=str(
+                efficiency_payload.get(
+                    "type", "steps_to_success_normalized_by_max_episode_steps"
+                )
+            )
+        ),
+        candidate_score=CandidateScoreSpec(
+            lambda_=float(candidate_payload.get("lambda", 1.0)),
+            beta=float(candidate_payload.get("beta", 0.0)),
+            default_weights={
+                str(key): float(value)
+                for key, value in dict(
+                    candidate_payload.get(
+                        "default_weights",
+                        {
+                            "score_safety": 0.5,
+                            "score_efficiency": 0.5,
+                        },
+                    )
+                ).items()
+            },
+            active_components=tuple(
+                str(item)
+                for item in candidate_payload.get(
+                    "active_components",
+                    ("score_safety", "score_efficiency"),
+                )
+            ),
+        ),
+        smoothness_score=SmoothnessScoreSpec(
+            jerk_scale_mm_s3=_to_optional_float(
+                smoothness_payload.get("jerk_scale_mm_s3")
+            )
+        ),
+    )
+
+
+def _parse_candidate_summary(payload: dict[str, Any]) -> CandidateSummary:
+    return CandidateSummary(
+        scenario_name=str(payload.get("scenario_name", "")),
+        candidate_name=str(payload.get("candidate_name", "")),
+        execution_wire=_parse_wire_ref(payload.get("execution_wire", "")),
+        trained_on_wire=(
+            _parse_wire_ref(payload["trained_on_wire"])
+            if payload.get("trained_on_wire")
+            else None
+        ),
+        trial_count=int(payload.get("trial_count", 0)),
+        success_rate=_to_optional_float(payload.get("success_rate")),
+        valid_rate=_to_optional_float(payload.get("valid_rate")),
+        soft_score_mean_valid=_to_optional_float(payload.get("soft_score_mean_valid")),
+        soft_score_std_valid=_to_optional_float(payload.get("soft_score_std_valid")),
+        candidate_score_final=_to_optional_float(payload.get("candidate_score_final")),
+        score_mean=_to_optional_float(payload.get("score_mean")),
+        score_std=_to_optional_float(payload.get("score_std")),
+        steps_total_mean=_to_optional_float(payload.get("steps_total_mean")),
+        steps_to_success_mean=_to_optional_float(payload.get("steps_to_success_mean")),
+        tip_speed_max_mean_mm_s=_to_optional_float(payload.get("tip_speed_max_mean_mm_s")),
+        wire_force_normal_trial_max_mean_N=_to_optional_float(
+            payload.get("wire_force_normal_trial_max_mean_N")
+        ),
+        force_available_rate=_to_optional_float(payload.get("force_available_rate")),
+    )
+
+
+def _parse_force_telemetry(
+    payload: Optional[dict[str, Any]]
+) -> Optional[ForceTelemetrySummary]:
     if not payload:
         return None
     return ForceTelemetrySummary(
@@ -851,9 +1897,13 @@ def _parse_force_telemetry(payload: Optional[dict[str, Any]]) -> Optional[ForceT
         channel=str(payload.get("channel", "")),
         quality_tier=str(payload.get("quality_tier", "unavailable")),
         association_method=str(payload.get("association_method", "none")),
-        association_explicit_ratio=_to_optional_float(payload.get("association_explicit_ratio")),
+        association_explicit_ratio=_to_optional_float(
+            payload.get("association_explicit_ratio")
+        ),
         association_coverage=_to_optional_float(payload.get("association_coverage")),
-        association_explicit_force_coverage=_to_optional_float(payload.get("association_explicit_force_coverage")),
+        association_explicit_force_coverage=_to_optional_float(
+            payload.get("association_explicit_force_coverage")
+        ),
         ordering_stable=bool(payload.get("ordering_stable", False)),
         active_constraint_any=bool(payload.get("active_constraint_any", False)),
         contact_detected_any=bool(payload.get("contact_detected_any", False)),
@@ -863,29 +1913,241 @@ def _parse_force_telemetry(payload: Optional[dict[str, Any]]) -> Optional[ForceT
         lcp_sum_abs_mean=_to_optional_float(payload.get("lcp_sum_abs_mean")),
         wire_force_norm_max=_to_optional_float(payload.get("wire_force_norm_max")),
         wire_force_norm_mean=_to_optional_float(payload.get("wire_force_norm_mean")),
-        collision_force_norm_max=_to_optional_float(payload.get("collision_force_norm_max")),
-        collision_force_norm_mean=_to_optional_float(payload.get("collision_force_norm_mean")),
+        collision_force_norm_max=_to_optional_float(
+            payload.get("collision_force_norm_max")
+        ),
+        collision_force_norm_mean=_to_optional_float(
+            payload.get("collision_force_norm_mean")
+        ),
         total_force_norm_max=_to_optional_float(payload.get("total_force_norm_max")),
         total_force_norm_mean=_to_optional_float(payload.get("total_force_norm_mean")),
-        total_force_norm_max_newton=_to_optional_float(payload.get("total_force_norm_max_newton")),
-        total_force_norm_mean_newton=_to_optional_float(payload.get("total_force_norm_mean_newton")),
-        peak_segment_force_norm=_to_optional_float(payload.get("peak_segment_force_norm")),
-        peak_segment_force_norm_newton=_to_optional_float(payload.get("peak_segment_force_norm_newton")),
-        peak_segment_force_step=(None if payload.get("peak_segment_force_step") is None else int(payload.get("peak_segment_force_step"))),
-        peak_segment_force_segment_id=(None if payload.get("peak_segment_force_segment_id") is None else int(payload.get("peak_segment_force_segment_id"))),
-        peak_segment_force_time_s=_to_optional_float(payload.get("peak_segment_force_time_s")),
-        gap_active_projected_count_sum=int(payload.get("gap_active_projected_count_sum", 0)),
-        gap_explicit_mapped_count_sum=int(payload.get("gap_explicit_mapped_count_sum", 0)),
+        peak_segment_force_norm=_to_optional_float(
+            payload.get("peak_segment_force_norm")
+        ),
+        peak_segment_force_step=(
+            None
+            if payload.get("peak_segment_force_step") is None
+            else int(payload.get("peak_segment_force_step"))
+        ),
+        peak_segment_force_segment_id=(
+            None
+            if payload.get("peak_segment_force_segment_id") is None
+            else int(payload.get("peak_segment_force_segment_id"))
+        ),
+        peak_segment_force_time_s=_to_optional_float(
+            payload.get("peak_segment_force_time_s")
+        ),
+        wire_force_magnitude_instant_N=_to_optional_float(
+            payload.get("wire_force_magnitude_instant_N")
+        ),
+        wire_force_magnitude_trial_max_N=_to_optional_float(
+            payload.get("wire_force_magnitude_trial_max_N")
+        ),
+        wire_force_magnitude_trial_mean_N=_to_optional_float(
+            payload.get("wire_force_magnitude_trial_mean_N")
+        ),
+        wire_force_normal_instant_N=_to_optional_float(
+            payload.get("wire_force_normal_instant_N")
+        ),
+        wire_force_normal_trial_max_N=_to_optional_float(
+            payload.get("wire_force_normal_trial_max_N")
+        ),
+        wire_force_normal_trial_mean_N=_to_optional_float(
+            payload.get("wire_force_normal_trial_mean_N")
+        ),
+        tip_force_magnitude_instant_N=_to_optional_float(
+            payload.get("tip_force_magnitude_instant_N")
+        ),
+        tip_force_magnitude_trial_max_N=_to_optional_float(
+            payload.get("tip_force_magnitude_trial_max_N")
+        ),
+        tip_force_magnitude_trial_mean_N=_to_optional_float(
+            payload.get("tip_force_magnitude_trial_mean_N")
+        ),
+        tip_force_normal_instant_N=_to_optional_float(
+            payload.get("tip_force_normal_instant_N")
+        ),
+        tip_force_normal_trial_max_N=_to_optional_float(
+            payload.get("tip_force_normal_trial_max_N")
+        ),
+        tip_force_normal_trial_mean_N=_to_optional_float(
+            payload.get("tip_force_normal_trial_mean_N")
+        ),
+        gap_active_projected_count_sum=int(
+            payload.get("gap_active_projected_count_sum", 0)
+        ),
+        gap_explicit_mapped_count_sum=int(
+            payload.get("gap_explicit_mapped_count_sum", 0)
+        ),
         gap_unmapped_count_sum=int(payload.get("gap_unmapped_count_sum", 0)),
         gap_unmapped_ratio=_to_optional_float(payload.get("gap_unmapped_ratio")),
         gap_dominant_class=str(payload.get("gap_dominant_class", "none")),
         gap_contact_mode=str(payload.get("gap_contact_mode", "none")),
+        tip_force_available=bool(payload.get("tip_force_available", False)),
+        tip_force_validation_status=str(
+            payload.get("tip_force_validation_status", "unmapped")
+        ),
+        tip_force_records=tuple(payload.get("tip_force_records", ())),
+        tip_force_total_vector_N=_parse_vector3(
+            payload.get("tip_force_total_vector_N")
+        ),
+        lcp_mapped_wall_row_count_max=int(
+            payload.get("lcp_mapped_wall_row_count_max", 0)
+        ),
+        lcp_contact_export_coverage=_to_optional_float(
+            payload.get("lcp_contact_export_coverage")
+        ),
     )
+
+
+def _h5_string_column(group: h5py.Group, name: str) -> list[str]:
+    values = group[name][...]
+    decoded: list[str] = []
+    for value in values:
+        if isinstance(value, bytes):
+            decoded.append(value.decode("utf-8"))
+        else:
+            decoded.append(str(value))
+    return decoded
+
+
+def _load_trials_from_h5(path: Path) -> Tuple[TrialResult, ...]:
+    with h5py.File(path, "r") as handle:
+        group = handle["trials"]
+        n_rows = int(group["trial_index"].shape[0])
+        scenario_names = _h5_string_column(group, "scenario_name")
+        candidate_names = _h5_string_column(group, "candidate_name")
+        execution_wires = _h5_string_column(group, "execution_wire")
+        trained_on_wires = _h5_string_column(group, "trained_on_wire")
+        trace_paths = _h5_string_column(group, "trace_h5_path")
+        end_reasons = (
+            _h5_string_column(group, "end_reason")
+            if "end_reason" in group
+            else ["unknown"] * n_rows
+        )
+        rows: list[TrialResult] = []
+        for idx in range(n_rows):
+            force_available = bool(group["force_available_for_score"][idx])
+            wire_force_magnitude_instant_N = _to_optional_float(
+                group["wire_force_magnitude_instant_N"][idx]
+            )
+            wire_force_magnitude_trial_max_N = _to_optional_float(
+                group["wire_force_magnitude_trial_max_N"][idx]
+            )
+            wire_force_magnitude_trial_mean_N = _to_optional_float(
+                group["wire_force_magnitude_trial_mean_N"][idx]
+            )
+            wire_force_normal_instant_N = _to_optional_float(
+                group["wire_force_normal_instant_N"][idx]
+            )
+            wire_force_normal_trial_max_N = _to_optional_float(
+                group["wire_force_normal_trial_max_N"][idx]
+            )
+            wire_force_normal_trial_mean_N = _to_optional_float(
+                group["wire_force_normal_trial_mean_N"][idx]
+            )
+            tip_force_magnitude_instant_N = _to_optional_float(
+                group["tip_force_magnitude_instant_N"][idx]
+            )
+            tip_force_magnitude_trial_max_N = _to_optional_float(
+                group["tip_force_magnitude_trial_max_N"][idx]
+            )
+            tip_force_magnitude_trial_mean_N = _to_optional_float(
+                group["tip_force_magnitude_trial_mean_N"][idx]
+            )
+            tip_force_normal_instant_N = _to_optional_float(
+                group["tip_force_normal_instant_N"][idx]
+            )
+            tip_force_normal_trial_max_N = _to_optional_float(
+                group["tip_force_normal_trial_max_N"][idx]
+            )
+            tip_force_normal_trial_mean_N = _to_optional_float(
+                group["tip_force_normal_trial_mean_N"][idx]
+            )
+            trace_path_text = trace_paths[idx]
+            forces = ForceTelemetrySummary(
+                available_for_score=force_available,
+                validation_status="loaded_from_trials_h5",
+                wire_force_magnitude_instant_N=wire_force_magnitude_instant_N,
+                wire_force_magnitude_trial_max_N=wire_force_magnitude_trial_max_N,
+                wire_force_magnitude_trial_mean_N=wire_force_magnitude_trial_mean_N,
+                wire_force_normal_instant_N=wire_force_normal_instant_N,
+                wire_force_normal_trial_max_N=wire_force_normal_trial_max_N,
+                wire_force_normal_trial_mean_N=wire_force_normal_trial_mean_N,
+                tip_force_magnitude_instant_N=tip_force_magnitude_instant_N,
+                tip_force_magnitude_trial_max_N=tip_force_magnitude_trial_max_N,
+                tip_force_magnitude_trial_mean_N=tip_force_magnitude_trial_mean_N,
+                tip_force_normal_instant_N=tip_force_normal_instant_N,
+                tip_force_normal_trial_max_N=tip_force_normal_trial_max_N,
+                tip_force_normal_trial_mean_N=tip_force_normal_trial_mean_N,
+            )
+            rows.append(
+                TrialResult(
+                    scenario_name=scenario_names[idx],
+                    candidate_name=candidate_names[idx],
+                    execution_wire=_parse_wire_ref(execution_wires[idx]),
+                    policy=PolicySpec(
+                        name=f"{candidate_names[idx]}_policy",
+                        checkpoint_path=Path(),
+                        source="explicit",
+                        trained_on_wire=(
+                            _parse_wire_ref(trained_on_wires[idx])
+                            if trained_on_wires[idx]
+                            else None
+                        ),
+                    ),
+                    trial_index=int(group["trial_index"][idx]),
+                    seed=int(group["env_seed"][idx]),
+                    policy_seed=(
+                        None
+                        if math.isnan(float(group["policy_seed"][idx]))
+                        else int(group["policy_seed"][idx])
+                    ),
+                    score=ScoreBreakdown(
+                        total=float(group["score_total"][idx]),
+                        success=float(group["score_success"][idx]),
+                        efficiency=float(group["score_efficiency"][idx]),
+                        safety=_to_optional_float(group["score_safety"][idx]),
+                        smoothness=_to_optional_float(group["score_smoothness"][idx]),
+                    ),
+                    telemetry=TrialTelemetrySummary(
+                        success=bool(group["success"][idx]),
+                        steps_total=int(group["steps_total"][idx]),
+                        steps_to_success=(
+                            None
+                            if math.isnan(float(group["steps_to_success"][idx]))
+                            else int(group["steps_to_success"][idx])
+                        ),
+                        episode_reward=float(group["episode_reward"][idx]),
+                        end_reason=end_reasons[idx],
+                        wall_time_s=_to_optional_float(group["wall_time_s"][idx]),
+                        sim_time_s=_to_optional_float(group["sim_time_s"][idx]),
+                        tip_speed_max_mm_s=_to_optional_float(group["tip_speed_max_mm_s"][idx]),
+                        tip_speed_mean_mm_s=_to_optional_float(group["tip_speed_mean_mm_s"][idx]),
+                        tip_total_distance_mm=_to_optional_float(group["tip_total_distance_mm"][idx]),
+                        tip_acc_p95=_to_optional_float(group["tip_acc_p95"][idx]),
+                        tip_acc_max=_to_optional_float(group["tip_acc_max"][idx]),
+                        tip_jerk_p95=_to_optional_float(group["tip_jerk_p95"][idx]),
+                        tip_jerk_max=_to_optional_float(group["tip_jerk_max"][idx]),
+                        forces=forces,
+                    ),
+                    valid_for_ranking=bool(group["valid_for_ranking"][idx]),
+                    force_within_safety_threshold=bool(
+                        group["force_within_safety_threshold"][idx]
+                    ),
+                    artifacts=TrialArtifactPaths(
+                        trace_h5_path=Path(trace_path_text) if trace_path_text else None
+                    ),
+                )
+            )
+        return tuple(rows)
 
 
 def _parse_trial_result(payload: dict[str, Any]) -> TrialResult:
     telemetry_payload = payload.get("telemetry", {})
-    forces_payload = telemetry_payload.get("forces") if isinstance(telemetry_payload, dict) else None
+    forces_payload = (
+        telemetry_payload.get("forces") if isinstance(telemetry_payload, dict) else None
+    )
     return TrialResult(
         scenario_name=str(payload.get("scenario_name", "")),
         candidate_name=str(payload.get("candidate_name", "")),
@@ -893,26 +2155,65 @@ def _parse_trial_result(payload: dict[str, Any]) -> TrialResult:
         policy=_parse_policy_spec(payload.get("policy", {})),
         trial_index=int(payload.get("trial_index", 0)),
         seed=int(payload.get("seed", 0)),
+        policy_seed=(
+            None
+            if payload.get("policy_seed") is None
+            else int(payload.get("policy_seed"))
+        ),
         score=ScoreBreakdown(
             total=float(payload.get("score", {}).get("total", 0.0)),
             success=float(payload.get("score", {}).get("success", 0.0)),
             efficiency=float(payload.get("score", {}).get("efficiency", 0.0)),
-            safety=_to_optional_float(payload.get("score", {}).get("safety")),
-            smoothness=float(payload.get("score", {}).get("smoothness", 0.0)),
+            safety=float(payload.get("score", {}).get("safety", 0.0)),
+            smoothness=_to_optional_float(payload.get("score", {}).get("smoothness")),
         ),
         telemetry=TrialTelemetrySummary(
             success=bool(telemetry_payload.get("success", False)),
             steps_total=int(telemetry_payload.get("steps_total", 0)),
-            steps_to_success=(None if telemetry_payload.get("steps_to_success") is None else int(telemetry_payload.get("steps_to_success"))),
+            steps_to_success=(
+                None
+                if telemetry_payload.get("steps_to_success") is None
+                else int(telemetry_payload.get("steps_to_success"))
+            ),
             episode_reward=float(telemetry_payload.get("episode_reward", 0.0)),
+            end_reason=str(telemetry_payload.get("end_reason", "unknown")),
             wall_time_s=_to_optional_float(telemetry_payload.get("wall_time_s")),
             sim_time_s=_to_optional_float(telemetry_payload.get("sim_time_s")),
-            path_ratio_last=_to_optional_float(telemetry_payload.get("path_ratio_last")),
-            trajectory_length_last=_to_optional_float(telemetry_payload.get("trajectory_length_last")),
-            average_translation_speed_last=_to_optional_float(telemetry_payload.get("average_translation_speed_last")),
-            tip_speed_max_mm_s=_to_optional_float(telemetry_payload.get("tip_speed_max_mm_s")),
-            tip_speed_mean_mm_s=_to_optional_float(telemetry_payload.get("tip_speed_mean_mm_s")),
+            path_ratio_last=_to_optional_float(
+                telemetry_payload.get("path_ratio_last")
+            ),
+            trajectory_length_last=_to_optional_float(
+                telemetry_payload.get("trajectory_length_last")
+            ),
+            average_translation_speed_last=_to_optional_float(
+                telemetry_payload.get("average_translation_speed_last")
+            ),
+            tip_speed_max_mm_s=_to_optional_float(
+                telemetry_payload.get("tip_speed_max_mm_s")
+            ),
+            tip_speed_mean_mm_s=_to_optional_float(
+                telemetry_payload.get("tip_speed_mean_mm_s")
+            ),
+            tip_total_distance_mm=_to_optional_float(
+                telemetry_payload.get("tip_total_distance_mm")
+            ),
+            tip_acc_p95=_to_optional_float(telemetry_payload.get("tip_acc_p95")),
+            tip_acc_max=_to_optional_float(telemetry_payload.get("tip_acc_max")),
+            tip_jerk_p95=_to_optional_float(telemetry_payload.get("tip_jerk_p95")),
+            tip_jerk_max=_to_optional_float(telemetry_payload.get("tip_jerk_max")),
             forces=_parse_force_telemetry(forces_payload),
         ),
-        artifacts=TrialArtifactPaths(),
+        valid_for_ranking=bool(payload.get("valid_for_ranking", False)),
+        force_within_safety_threshold=bool(
+            payload.get("force_within_safety_threshold", False)
+        ),
+        artifacts=TrialArtifactPaths(
+            trace_npz_path=None,
+            trace_h5_path=(
+                None
+                if payload.get("artifacts", {}).get("trace_h5_path") is None
+                else Path(payload.get("artifacts", {}).get("trace_h5_path"))
+            ),
+        ),
+        warnings=tuple(str(item) for item in payload.get("warnings", ())),
     )

@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/agents/archvar_amplatz_gentle_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_amplatz_gentle_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/agents/archvar_amplatz_gentle_best/checkpoints",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/archive/agents/complete/complete_amplatz_gentle/2026-04-27_103759_a100x2_archvar_amplatz_gentle_v2_resume_1584434/checkpoints/best_checkpoint.everl",
+  "source_agent_json": null,
+  "tool": "amplatz_super_stiff/gentle"
+}

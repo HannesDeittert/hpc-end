@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_steve_standard_j_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_steve_standard_j_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_steve_standard_j_best/checkpoints",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/archive/agents/complete/complete_steve_standard_j/2026-04-25_163824_a100x1_archvar_steve_standardj_cap150_450_full_1583390/checkpoints/best_checkpoint.everl",
+  "source_agent_json": null,
+  "tool": "steve_default/standard_j"
+}

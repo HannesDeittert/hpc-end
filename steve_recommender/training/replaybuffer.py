@@ -90,7 +90,10 @@ class _SharedReplayProxy(_SharedReplayStateMixin, _VanillaSharedBase):
     pass
 
 
-class ResumableVanillaStepShared(_SharedReplayStateMixin, _VanillaStepShared):
+class ResumableVanillaStepShared(_VanillaStepShared):
+    state_dict = _SharedReplayStateMixin.state_dict
+    load_state_dict = _SharedReplayStateMixin.load_state_dict
+
     def run(self) -> None:
         internal_replay_buffer = ResumableVanillaStep(self.capacity, self._batch_size)
         self.loop(internal_replay_buffer)
@@ -138,8 +141,10 @@ class ResumableVanillaStepShared(_SharedReplayStateMixin, _VanillaStepShared):
             batch = self._push_queue.get()
             internal_replay_buffer.push(batch)
 
-    def copy(self) -> _SharedReplayProxy:
-        return _SharedReplayProxy(
+    def copy(self) -> _VanillaSharedBase:
+        # Worker/trainer processes only need push/sample/len. Returning the
+        # upstream proxy keeps the multiprocessing path identical to stEVE.
+        return _VanillaSharedBase(
             self._push_queue,
             self._sample_queue,
             self._task_queue,
@@ -172,9 +177,10 @@ class ResumableVanillaStepShared(_SharedReplayStateMixin, _VanillaStepShared):
         }
 
 
-class ResumableVanillaEpisodeShared(
-    _SharedReplayStateMixin, _VanillaEpisodeShared
-):
+class ResumableVanillaEpisodeShared(_VanillaEpisodeShared):
+    state_dict = _SharedReplayStateMixin.state_dict
+    load_state_dict = _SharedReplayStateMixin.load_state_dict
+
     def run(self) -> None:
         internal_replay_buffer = ResumableVanillaEpisode(
             self.capacity, self._batch_size

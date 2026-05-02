@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/agents/archvar_universalii_straight_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_universalii_straight_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/agents/archvar_universalii_straight_best/checkpoints",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/archive/agents/complete/complete_universalii_straight/2026-04-27_090442_crusher_archvar_universalii_straight_resume_nw22_20260427_090438_3339002/checkpoints/best_checkpoint.everl",
+  "source_agent_json": null,
+  "tool": "universal_ii/straight"
+}

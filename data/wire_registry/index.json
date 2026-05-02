@@ -1,34 +1,154 @@
 {
   "agents": {
-    "amplatz_super_stiff/standard_j:archvar_amplatz_superstiff_best": {
-      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_superstiff_best/agent.json",
-      "agent_ref": "amplatz_super_stiff/standard_j:archvar_amplatz_superstiff_best",
+    "amplatz_super_stiff/gentle:archvar_amplatz_gentle_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/agents/archvar_amplatz_gentle_best/agent.json",
+      "agent_ref": "amplatz_super_stiff/gentle:archvar_amplatz_gentle_best",
       "checkpoint_exists": true,
-      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_superstiff_best/checkpoints/best_checkpoint.everl",
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/agents/archvar_amplatz_gentle_best/checkpoints/best_checkpoint.everl",
       "model": "amplatz_super_stiff",
-      "name": "archvar_amplatz_superstiff_best",
-      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_superstiff_best/checkpoints",
+      "name": "archvar_amplatz_gentle_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/agents/archvar_amplatz_gentle_best/checkpoints",
+      "wire": "gentle"
+    },
+    "amplatz_super_stiff/standard_j:archvar_amplatz_standard_j_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_standard_j_best/agent.json",
+      "agent_ref": "amplatz_super_stiff/standard_j:archvar_amplatz_standard_j_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_standard_j_best/checkpoints/best_checkpoint.everl",
+      "model": "amplatz_super_stiff",
+      "name": "archvar_amplatz_standard_j_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j/agents/archvar_amplatz_standard_j_best/checkpoints",
       "wire": "standard_j"
     },
-    "steve_default/standard_j:archvar_original_best": {
-      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_original_best/agent.json",
-      "agent_ref": "steve_default/standard_j:archvar_original_best",
+    "amplatz_super_stiff/straight:archvar_amplatz_straight_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight/agents/archvar_amplatz_straight_best/agent.json",
+      "agent_ref": "amplatz_super_stiff/straight:archvar_amplatz_straight_best",
       "checkpoint_exists": true,
-      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_original_best/checkpoints/best_checkpoint.everl",
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight/agents/archvar_amplatz_straight_best/checkpoints/best_checkpoint.everl",
+      "model": "amplatz_super_stiff",
+      "name": "archvar_amplatz_straight_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight/agents/archvar_amplatz_straight_best/checkpoints",
+      "wire": "straight"
+    },
+    "amplatz_super_stiff/strong_hook:archvar_amplatz_strong_hook_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook/agents/archvar_amplatz_strong_hook_best/agent.json",
+      "agent_ref": "amplatz_super_stiff/strong_hook:archvar_amplatz_strong_hook_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook/agents/archvar_amplatz_strong_hook_best/checkpoints/best_checkpoint.everl",
+      "model": "amplatz_super_stiff",
+      "name": "archvar_amplatz_strong_hook_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook/agents/archvar_amplatz_strong_hook_best/checkpoints",
+      "wire": "strong_hook"
+    },
+    "amplatz_super_stiff/tight_j:archvar_amplatz_tight_j_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j/agents/archvar_amplatz_tight_j_best/agent.json",
+      "agent_ref": "amplatz_super_stiff/tight_j:archvar_amplatz_tight_j_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j/agents/archvar_amplatz_tight_j_best/checkpoints/best_checkpoint.everl",
+      "model": "amplatz_super_stiff",
+      "name": "archvar_amplatz_tight_j_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j/agents/archvar_amplatz_tight_j_best/checkpoints",
+      "wire": "tight_j"
+    },
+    "steve_default/gentle:archvar_steve_gentle_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle/agents/archvar_steve_gentle_best/agent.json",
+      "agent_ref": "steve_default/gentle:archvar_steve_gentle_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle/agents/archvar_steve_gentle_best/checkpoints/best_checkpoint.everl",
       "model": "steve_default",
-      "name": "archvar_original_best",
-      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_original_best/checkpoints",
+      "name": "archvar_steve_gentle_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle/agents/archvar_steve_gentle_best/checkpoints",
+      "wire": "gentle"
+    },
+    "steve_default/standard_j:archvar_steve_standard_j_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_steve_standard_j_best/agent.json",
+      "agent_ref": "steve_default/standard_j:archvar_steve_standard_j_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_steve_standard_j_best/checkpoints/best_checkpoint.everl",
+      "model": "steve_default",
+      "name": "archvar_steve_standard_j_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j/agents/archvar_steve_standard_j_best/checkpoints",
       "wire": "standard_j"
     },
-    "universal_ii/standard_j:archvar_universalII_best": {
-      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalII_best/agent.json",
-      "agent_ref": "universal_ii/standard_j:archvar_universalII_best",
+    "steve_default/straight:archvar_steve_straight_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight/agents/archvar_steve_straight_best/agent.json",
+      "agent_ref": "steve_default/straight:archvar_steve_straight_best",
       "checkpoint_exists": true,
-      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalII_best/checkpoints/best_checkpoint.everl",
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight/agents/archvar_steve_straight_best/checkpoints/best_checkpoint.everl",
+      "model": "steve_default",
+      "name": "archvar_steve_straight_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight/agents/archvar_steve_straight_best/checkpoints",
+      "wire": "straight"
+    },
+    "steve_default/strong_hook:archvar_steve_strong_hook_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook/agents/archvar_steve_strong_hook_best/agent.json",
+      "agent_ref": "steve_default/strong_hook:archvar_steve_strong_hook_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook/agents/archvar_steve_strong_hook_best/checkpoints/best_checkpoint.everl",
+      "model": "steve_default",
+      "name": "archvar_steve_strong_hook_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook/agents/archvar_steve_strong_hook_best/checkpoints",
+      "wire": "strong_hook"
+    },
+    "steve_default/tight_j:archvar_steve_tight_j_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/agent.json",
+      "agent_ref": "steve_default/tight_j:archvar_steve_tight_j_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/checkpoints/best_checkpoint.everl",
+      "model": "steve_default",
+      "name": "archvar_steve_tight_j_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents/archvar_steve_tight_j_best/checkpoints",
+      "wire": "tight_j"
+    },
+    "universal_ii/gentle:archvar_universalii_gentle_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle/agents/archvar_universalii_gentle_best/agent.json",
+      "agent_ref": "universal_ii/gentle:archvar_universalii_gentle_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle/agents/archvar_universalii_gentle_best/checkpoints/best_checkpoint.everl",
       "model": "universal_ii",
-      "name": "archvar_universalII_best",
-      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalII_best/checkpoints",
+      "name": "archvar_universalii_gentle_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle/agents/archvar_universalii_gentle_best/checkpoints",
+      "wire": "gentle"
+    },
+    "universal_ii/standard_j:archvar_universalii_standard_j_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalii_standard_j_best/agent.json",
+      "agent_ref": "universal_ii/standard_j:archvar_universalii_standard_j_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalii_standard_j_best/checkpoints/best_checkpoint.everl",
+      "model": "universal_ii",
+      "name": "archvar_universalii_standard_j_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j/agents/archvar_universalii_standard_j_best/checkpoints",
       "wire": "standard_j"
+    },
+    "universal_ii/straight:archvar_universalii_straight_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/agents/archvar_universalii_straight_best/agent.json",
+      "agent_ref": "universal_ii/straight:archvar_universalii_straight_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/agents/archvar_universalii_straight_best/checkpoints/best_checkpoint.everl",
+      "model": "universal_ii",
+      "name": "archvar_universalii_straight_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/agents/archvar_universalii_straight_best/checkpoints",
+      "wire": "straight"
+    },
+    "universal_ii/strong_hook:archvar_universalii_strong_hook_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/agents/archvar_universalii_strong_hook_best/agent.json",
+      "agent_ref": "universal_ii/strong_hook:archvar_universalii_strong_hook_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/agents/archvar_universalii_strong_hook_best/checkpoints/best_checkpoint.everl",
+      "model": "universal_ii",
+      "name": "archvar_universalii_strong_hook_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/agents/archvar_universalii_strong_hook_best/checkpoints",
+      "wire": "strong_hook"
+    },
+    "universal_ii/tight_j:archvar_universalii_tight_j_best": {
+      "agent_json_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j/agents/archvar_universalii_tight_j_best/agent.json",
+      "agent_ref": "universal_ii/tight_j:archvar_universalii_tight_j_best",
+      "checkpoint_exists": true,
+      "checkpoint_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j/agents/archvar_universalii_tight_j_best/checkpoints/best_checkpoint.everl",
+      "model": "universal_ii",
+      "name": "archvar_universalii_tight_j_best",
+      "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j/agents/archvar_universalii_tight_j_best/checkpoints",
+      "wire": "tight_j"
     }
   },
   "created_at_utc": "2026-04-17T13:56:51.445633+00:00",
@@ -53,10 +173,10 @@
     }
   },
   "schema_version": 1,
-  "updated_at_utc": "2026-04-18T11:16:51.636506+00:00",
+  "updated_at_utc": "2026-05-01T17:00:22.985094+00:00",
   "wires": {
     "amplatz_super_stiff/gentle": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/agents",
       "model": "amplatz_super_stiff",
       "name": "gentle",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/gentle/tool_definition.json",
@@ -74,7 +194,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/standard_j"
     },
     "amplatz_super_stiff/straight": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight/agents",
       "model": "amplatz_super_stiff",
       "name": "straight",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight/tool_definition.json",
@@ -83,7 +203,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/straight"
     },
     "amplatz_super_stiff/strong_hook": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook/agents",
       "model": "amplatz_super_stiff",
       "name": "strong_hook",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook/tool_definition.json",
@@ -92,7 +212,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/strong_hook"
     },
     "amplatz_super_stiff/tight_j": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j/agents",
       "model": "amplatz_super_stiff",
       "name": "tight_j",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j/tool_definition.json",
@@ -101,7 +221,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/amplatz_super_stiff/wire_versions/tight_j"
     },
     "steve_default/gentle": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle/agents",
       "model": "steve_default",
       "name": "gentle",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/gentle/tool_definition.json",
@@ -119,7 +239,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/standard_j"
     },
     "steve_default/straight": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight/agents",
       "model": "steve_default",
       "name": "straight",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight/tool_definition.json",
@@ -128,7 +248,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/straight"
     },
     "steve_default/strong_hook": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook/agents",
       "model": "steve_default",
       "name": "strong_hook",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook/tool_definition.json",
@@ -137,7 +257,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/strong_hook"
     },
     "steve_default/tight_j": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/agents",
       "model": "steve_default",
       "name": "tight_j",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j/tool_definition.json",
@@ -146,7 +266,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/steve_default/wire_versions/tight_j"
     },
     "universal_ii/gentle": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle/agents",
       "model": "universal_ii",
       "name": "gentle",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/gentle/tool_definition.json",
@@ -164,7 +284,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/standard_j"
     },
     "universal_ii/straight": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/agents",
       "model": "universal_ii",
       "name": "straight",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight/tool_definition.json",
@@ -173,7 +293,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/straight"
     },
     "universal_ii/strong_hook": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/agents",
       "model": "universal_ii",
       "name": "strong_hook",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/tool_definition.json",
@@ -182,7 +302,7 @@
       "wire_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook"
     },
     "universal_ii/tight_j": {
-      "agents_dir": null,
+      "agents_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j/agents",
       "model": "universal_ii",
       "name": "tight_j",
       "tool_definition_path": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/tight_j/tool_definition.json",

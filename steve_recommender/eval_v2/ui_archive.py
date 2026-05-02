@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtSvg import QSvgWidget
@@ -14,7 +13,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .models import EvaluationReport, HistoricalReportSummary
+from .models import HistoricalReportSummary
 from .ui_controller import ClinicalUIController
 
 
@@ -212,7 +211,7 @@ class ArchiveScreen(QWidget):
         self._content_layout.addStretch(1)
 
     def _on_view_details_requested(self, summary: HistoricalReportSummary) -> None:
-        report = self.controller.load_report_from_disk(summary.report_json_path)
+        report = self.controller.load_manifest_from_disk(summary.manifest_json_path)
         self.report_selected.emit(report)
 
 

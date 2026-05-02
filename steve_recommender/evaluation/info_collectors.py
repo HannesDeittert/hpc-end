@@ -163,6 +163,10 @@ class SofaWallForceInfo:
         self._force_norm_sum = float("nan")
         self._wall_field_force_vector = np.zeros((3,), dtype=np.float32)
         self._wall_field_force_norm = float("nan")
+        self._tip_force_vector = np.zeros((3,), dtype=np.float32)
+        self._tip_force_norm = float("nan")
+        self._tip_force_sample_index = -1
+        self._tip_force_source = "none"
         self._status = ""
         self._gap_active_projected_count = 0
         self._gap_explicit_mapped_count = 0
@@ -257,6 +261,61 @@ class SofaWallForceInfo:
         except Exception:
             return float("nan"), float("nan"), 0
 
+    def _resolve_constraint_dt_s(self, sim: Any) -> Optional[float]:
+        """Resolve dt for lambda->force conversion.
+
+        Priority:
+        1) live SOFA root dt (simulation substep)
+        2) configured fallback dt from constructor
+        """
+
+        try:
+            root = getattr(sim, "root", None)
+            raw_dt = self._read_data(root, "dt") if root is not None else None
+            dt = float(raw_dt)
+            if np.isfinite(dt) and dt > 0.0:
+                return float(dt)
+        except Exception:
+            pass
+        return self._constraint_dt_s
+
+    @staticmethod
+    def _extract_tip_force_from_samples(
+        *,
+        tip_pos: Any,
+        candidate_forces: np.ndarray,
+        candidate_positions: np.ndarray,
+        contact_epsilon: float,
+    ) -> Tuple[np.ndarray, float, int, str]:
+        """Pick the force sample nearest to the current tip position."""
+
+        out_zero = np.zeros((3,), dtype=np.float32)
+        try:
+            tip = np.asarray(tip_pos, dtype=np.float32).reshape((3,))
+        except Exception:
+            return out_zero, float("nan"), -1, "none"
+        if not np.all(np.isfinite(tip)):
+            return out_zero, float("nan"), -1, "none"
+
+        forces = np.asarray(candidate_forces, dtype=np.float32)
+        positions = np.asarray(candidate_positions, dtype=np.float32)
+        if forces.ndim != 2 or positions.ndim != 2 or forces.shape[1] < 3 or positions.shape[1] < 3:
+            return out_zero, float("nan"), -1, "none"
+        n = int(min(forces.shape[0], positions.shape[0]))
+        if n <= 0:
+            return out_zero, float("nan"), -1, "none"
+
+        forces = forces[:n, :3]
+        positions = positions[:n, :3]
+        d2 = np.sum((positions - tip.reshape((1, 3))) ** 2, axis=1)
+        idx = int(np.argmin(d2))
+        vec = forces[idx].astype(np.float32)
+        norm = float(np.linalg.norm(vec))
+        eps = float(max(contact_epsilon, 0.0))
+        if not np.isfinite(norm) or norm <= eps:
+            return out_zero, 0.0, idx, "nearest_tip_sample_below_epsilon"
+        return vec, norm, idx, "nearest_tip_sample"
+
     def _apply_si_conversion_if_needed(self) -> None:
         if not self._unit_converted_si:
             return
@@ -272,6 +331,7 @@ class SofaWallForceInfo:
         self._total_force_vector = np.asarray(self._total_force_vector, dtype=np.float32) * s
         self._wire_force_vectors = np.asarray(self._wire_force_vectors, dtype=np.float32) * s
         self._collision_force_vectors = np.asarray(self._collision_force_vectors, dtype=np.float32) * s
+        self._tip_force_vector = np.asarray(self._tip_force_vector, dtype=np.float32) * s
 
         if np.isfinite(self._total_force_norm):
             self._total_force_norm = float(self._total_force_norm * s)
@@ -283,6 +343,8 @@ class SofaWallForceInfo:
             self._force_norm_sum = float(self._force_norm_sum * s)
         if np.isfinite(self._wall_field_force_norm):
             self._wall_field_force_norm = float(self._wall_field_force_norm * s)
+        if np.isfinite(self._tip_force_norm):
+            self._tip_force_norm = float(self._tip_force_norm * s)
         self._wall_field_force_vector = np.asarray(self._wall_field_force_vector, dtype=np.float32) * s
 
     @staticmethod
@@ -1049,6 +1111,12 @@ class SofaWallForceInfo:
         else:
             lcp_forces = np.asarray(lcp_raw, dtype=np.float32)
 
+        resolved_dt_s = (
+            self._resolve_constraint_dt_s(sim)
+            if self._mode == "constraint_projected_si_validated"
+            else None
+        )
+
         def add_state_projection(prefix: str, state_obj: Any, *, allow_6dof_pos: bool) -> None:
             if state_obj is None:
                 return
@@ -1063,7 +1131,7 @@ class SofaWallForceInfo:
                 lcp_forces=lcp_forces,
                 constraint_raw=constraint_raw,
                 n_points=int(positions.shape[0]),
-                dt_s=self._constraint_dt_s if self._mode == "constraint_projected_si_validated" else None,
+                dt_s=resolved_dt_s,
             )
             if proj.size == 0:
                 return
@@ -2482,6 +2550,28 @@ class SofaWallForceInfo:
                         candidates, key=lambda c: float(c[3])
                     )
 
+            tip_pos = None
+            try:
+                tip_pos = np.asarray(
+                    self._intervention.fluoroscopy.tracking3d[0],
+                    dtype=np.float32,
+                )
+            except Exception:
+                tip_pos = None
+            (
+                self._tip_force_vector,
+                self._tip_force_norm,
+                self._tip_force_sample_index,
+                self._tip_force_source,
+            ) = self._extract_tip_force_from_samples(
+                tip_pos=tip_pos,
+                candidate_forces=best_forces,
+                candidate_positions=best_positions,
+                contact_epsilon=self._contact_epsilon,
+            )
+            if best_source and self._tip_force_source != "none":
+                self._tip_force_source = f"{self._tip_force_source}[{best_source}]"
+
             collision_candidates = [
                 c for c in candidates if c[0].startswith("collision.constraintProjection")
             ]
@@ -2997,6 +3087,35 @@ class SofaWallForceInfo:
                     and float(self._lcp_max_abs) > float(self._contact_epsilon)
                 )
             )
+            try:
+                tip_pos = np.asarray(
+                    self._intervention.fluoroscopy.tracking3d[0],
+                    dtype=np.float32,
+                )
+            except Exception:
+                tip_pos = None
+            coll_positions = np.zeros((0, 3), dtype=np.float32)
+            try:
+                coll_dofs = sim._instruments_combined.CollisionModel.CollisionDOFs  # noqa: SLF001
+                coll_positions = self._normalize_point_coord_array(
+                    self._read_data(coll_dofs, "position"),
+                    allow_6dof=False,
+                )
+            except Exception:
+                pass
+            (
+                self._tip_force_vector,
+                self._tip_force_norm,
+                self._tip_force_sample_index,
+                self._tip_force_source,
+            ) = self._extract_tip_force_from_samples(
+                tip_pos=tip_pos,
+                candidate_forces=self._collision_force_vectors,
+                candidate_positions=coll_positions,
+                contact_epsilon=self._contact_epsilon,
+            )
+            if self._tip_force_source != "none":
+                self._tip_force_source = "nearest_tip_sample[intrusive_collision]"
             self._apply_si_conversion_if_needed()
         except Exception as exc:
             self._available = False
@@ -3081,10 +3200,16 @@ class SofaWallForceInfo:
             "wall_collision_force_vectors_source": self._collision_force_vectors_source,
             "wall_field_force_vector": self._wall_field_force_vector,
             "wall_field_force_norm": self._wall_field_force_norm,
+            "wall_tip_force_vector": self._tip_force_vector,
+            "wall_tip_force_norm": self._tip_force_norm,
+            "wall_tip_force_sample_index": int(self._tip_force_sample_index),
+            "wall_tip_force_source": self._tip_force_source,
             "wall_total_force_vector_N": self._total_force_vector,
             "wall_total_force_norm_N": self._total_force_norm,
             "wall_active_segment_force_vectors_N": self._wall_active_segment_force_vectors,
             "wall_segment_force_vectors_N": self._segment_force_vectors,
+            "wall_tip_force_vector_N": self._tip_force_vector,
+            "wall_tip_force_norm_N": self._tip_force_norm,
             "force_units": units,
             "unit_converted_si": bool(self._unit_converted_si),
             "force_unit_scale_to_newton": self._unit_scale_to_newton,

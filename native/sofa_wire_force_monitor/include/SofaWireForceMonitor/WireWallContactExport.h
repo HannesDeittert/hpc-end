@@ -80,6 +80,7 @@ private:
         const std::string& serialized);
     bool collectRecordsFromNode(
         sofa::simulation::Node* node,
+        const MechanicalState* vesselMechanicalState,
         const std::string& nodeTag,
         unsigned int wallSide,
         const std::string& wallPrimitive,

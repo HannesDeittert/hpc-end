@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import threading
 import unittest
 
 from PyQt5.QtWidgets import QApplication

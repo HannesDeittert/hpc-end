@@ -20,13 +20,16 @@ def _summary(*, success_rate: float, time_value: float, force_value: float) -> C
         trained_on_wire=wire,
         trial_count=1,
         success_rate=success_rate,
+        valid_rate=success_rate,
+        soft_score_mean_valid=0.0,
+        soft_score_std_valid=0.0,
+        candidate_score_final=0.0,
         score_mean=0.0,
         score_std=0.0,
         steps_total_mean=time_value,
         steps_to_success_mean=time_value,
         tip_speed_max_mean_mm_s=0.0,
-        wall_force_max_mean=force_value,
-        wall_force_max_mean_newton=force_value,
+        wire_force_normal_trial_max_mean_N=force_value,
         force_available_rate=1.0,
     )
 

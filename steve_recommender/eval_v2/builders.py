@@ -10,6 +10,7 @@ from third_party.stEVE.eve.intervention.simulation import Simulation
 from third_party.stEVE.eve.intervention.target import (
     BranchEnd,
     BranchIndex,
+    CenterlineRandom,
     Manual,
     Target,
 )
@@ -23,6 +24,7 @@ from .models import (
     AorticArchAnatomy,
     BranchEndTarget,
     BranchIndexTarget,
+    CenterlineRandomTarget,
     FluoroscopySpec,
     ManualTarget,
     TargetSpec,
@@ -83,6 +85,18 @@ def build_target(
             branch=target.branch,
             idx=target.index,
         )
+    if isinstance(target, CenterlineRandomTarget):
+        branch_names = list(target.branches)
+        if not branch_names:
+            branch_names = [branch.name for branch in sorted(vessel_tree.branches, key=lambda item: item.name)]
+        target_obj = CenterlineRandom(
+            vessel_tree=vessel_tree,
+            fluoroscopy=fluoroscopy,
+            threshold=target.threshold_mm,
+            branches=branch_names,
+        )
+        setattr(target_obj, "_eval_v2_seed_override", int(target.seed))
+        return target_obj
     if isinstance(target, ManualTarget):
         return Manual(
             targets_vessel_cs=[

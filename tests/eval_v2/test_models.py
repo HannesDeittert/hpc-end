@@ -13,14 +13,17 @@ from steve_recommender.eval_v2.models import (
     EvaluationJob,
     EvaluationScenario,
     ExecutionPlan,
+    ForceScoringSpec,
     FluoroscopySpec,
     ForceCalibrationPolicy,
     ForceTelemetrySpec,
     ForceUnits,
     ManualTarget,
     PolicySpec,
-    ScoreScales,
+    SafetyScoreSpec,
+    SmoothnessScoreSpec,
     TargetModeDescriptor,
+    VisualizationSpec,
     WireRef,
 )
 
@@ -139,9 +142,10 @@ class PositiveAndNonNegativeValidationTests(unittest.TestCase):
                 "ManualTarget.threshold_mm.zero",
                 lambda: ManualTarget(targets_vessel_cs=((1.0, 2.0, 3.0),), threshold_mm=0.0),
             ),
-            ("ScoreScales.force_scale.zero", lambda: ScoreScales(force_scale=0.0)),
-            ("ScoreScales.lcp_scale.negative", lambda: ScoreScales(lcp_scale=-1.0)),
-            ("ScoreScales.speed_scale_mm_s.zero", lambda: ScoreScales(speed_scale_mm_s=0.0)),
+            ("ForceScoringSpec.force_max_N.zero", lambda: ForceScoringSpec(force_max_N=0.0)),
+            ("ForceScoringSpec.tip_length_mm.zero", lambda: ForceScoringSpec(tip_length_mm=0.0)),
+            ("SafetyScoreSpec.p.zero", lambda: SafetyScoreSpec(p=0.0)),
+            ("SmoothnessScoreSpec.jerk_scale_mm_s3.zero", lambda: SmoothnessScoreSpec(jerk_scale_mm_s3=0.0)),
         ]
 
         for label, factory in cases:
@@ -236,12 +240,110 @@ class PropertyTests(unittest.TestCase):
         self.assertFalse(candidate.is_cross_wire)
 
     def test_execution_plan_seeds_property_uses_explicit_seeds_when_provided(self) -> None:
-        plan = ExecutionPlan(explicit_seeds=(11, 13, 17))
+        plan = ExecutionPlan(trials_per_candidate=3, explicit_seeds=(11, 13, 17))
         self.assertEqual(plan.seeds, (11, 13, 17))
 
     def test_execution_plan_seeds_property_generates_default_sequence(self) -> None:
         plan = ExecutionPlan(trials_per_candidate=3, base_seed=100)
         self.assertEqual(plan.seeds, (100, 101, 102))
+
+    def test_execution_plan_environment_seeds_use_explicit_override(self) -> None:
+        plan = ExecutionPlan(
+            trials_per_candidate=3,
+            explicit_seeds=(11, 13, 17),
+        )
+        self.assertEqual(plan.environment_seeds, (11, 13, 17))
+
+    def test_execution_plan_rejects_explicit_environment_seed_count_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "explicit_seeds"):
+            ExecutionPlan(
+                trials_per_candidate=3,
+                explicit_seeds=(11, 13),
+            )
+
+    def test_execution_plan_deterministic_policy_seeds_are_disabled(self) -> None:
+        plan = ExecutionPlan(
+            trials_per_candidate=3,
+            base_seed=100,
+            policy_mode="deterministic",
+        )
+        self.assertEqual(plan.policy_seeds, (None, None, None))
+
+    def test_execution_plan_stochastic_policy_seeds_generate_default_sequence(self) -> None:
+        plan = ExecutionPlan(
+            trials_per_candidate=3,
+            base_seed=100,
+            policy_mode="stochastic",
+            policy_base_seed=1000,
+        )
+        self.assertEqual(plan.environment_seeds, (100, 101, 102))
+        self.assertEqual(plan.policy_seeds, (1000, 1001, 1002))
+
+    def test_execution_plan_stochastic_fixed_start_repeats_environment_seed(self) -> None:
+        plan = ExecutionPlan(
+            trials_per_candidate=3,
+            base_seed=123,
+            policy_mode="stochastic",
+            stochastic_environment_mode="fixed_start",
+        )
+        self.assertEqual(plan.environment_seeds, (123, 123, 123))
+
+    def test_execution_plan_stochastic_environment_mode_does_not_override_explicit_seeds(self) -> None:
+        plan = ExecutionPlan(
+            trials_per_candidate=3,
+            explicit_seeds=(123, 999, 42),
+            policy_mode="stochastic",
+            stochastic_environment_mode="fixed_start",
+        )
+        self.assertEqual(plan.environment_seeds, (123, 999, 42))
+
+    def test_execution_plan_accepts_explicit_policy_seed_override(self) -> None:
+        plan = ExecutionPlan(
+            trials_per_candidate=3,
+            policy_mode="stochastic",
+            policy_explicit_seeds=(1000, 1005, 1010),
+        )
+        self.assertEqual(plan.policy_seeds, (1000, 1005, 1010))
+
+    def test_execution_plan_rejects_explicit_policy_seed_count_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "policy_explicit_seeds"):
+            ExecutionPlan(
+                trials_per_candidate=3,
+                policy_mode="stochastic",
+                policy_explicit_seeds=(1000, 1001),
+            )
+
+    def test_execution_plan_trial_seed_pairs_align_environment_and_policy_sequences(self) -> None:
+        plan = ExecutionPlan(
+            trials_per_candidate=3,
+            base_seed=123,
+            policy_mode="stochastic",
+            policy_base_seed=1000,
+            stochastic_environment_mode="fixed_start",
+        )
+        self.assertEqual(
+            plan.trial_seed_pairs,
+            (
+                (123, 1000),
+                (123, 1001),
+                (123, 1002),
+            ),
+        )
+
+    def test_execution_plan_accepts_default_worker_count(self) -> None:
+        plan = ExecutionPlan()
+        self.assertEqual(plan.worker_count, 1)
+
+    def test_execution_plan_rejects_invalid_worker_count(self) -> None:
+        with self.assertRaises(ValueError):
+            ExecutionPlan(worker_count=0)
+
+    def test_execution_plan_rejects_parallel_visualized_runs(self) -> None:
+        with self.assertRaises(ValueError):
+            ExecutionPlan(
+                worker_count=2,
+                visualization=VisualizationSpec(enabled=True),
+            )
 
     def test_evaluation_scenario_action_dt_s_property(self) -> None:
         scenario = _scenario(fluoroscopy=FluoroscopySpec(image_frequency_hz=5.0))

@@ -51,8 +51,10 @@ class WizardStateTests(unittest.TestCase):
         self.assertEqual(state.selected_wires, [])
         self.assertTrue(state.is_deterministic)
         self.assertEqual(state.trials_per_wire, 1)
+        self.assertEqual(state.stochastic_environment_mode, "random_start")
         self.assertFalse(state.is_visualized)
         self.assertEqual(state.visualized_trials_count, 1)
+        self.assertEqual(state.worker_count, 1)
 
 
 class ClinicalUIControllerWizardStateTests(unittest.TestCase):
@@ -70,8 +72,10 @@ class ClinicalUIControllerWizardStateTests(unittest.TestCase):
         self.controller.set_wizard_execution_config(
             is_deterministic=False,
             trials_per_wire=3,
+            stochastic_environment_mode="fixed_start",
             is_visualized=True,
             visualized_trials_count=2,
+            worker_count=1,
         )
 
         self.controller.reset_wizard_state()
@@ -83,8 +87,10 @@ class ClinicalUIControllerWizardStateTests(unittest.TestCase):
         self.assertEqual(state.selected_wires, [])
         self.assertTrue(state.is_deterministic)
         self.assertEqual(state.trials_per_wire, 1)
+        self.assertEqual(state.stochastic_environment_mode, "random_start")
         self.assertFalse(state.is_visualized)
         self.assertEqual(state.visualized_trials_count, 1)
+        self.assertEqual(state.worker_count, 1)
 
     def test_validation_blocks_forward_without_selected_wires(self) -> None:
         anatomy = AorticArchAnatomy(arch_type="II", seed=42, record_id="Tree_00")
@@ -104,18 +110,35 @@ class ClinicalUIControllerWizardStateTests(unittest.TestCase):
         self.controller.set_wizard_execution_config(
             is_deterministic=False,
             trials_per_wire=2,
+            stochastic_environment_mode="random_start",
             is_visualized=True,
             visualized_trials_count=3,
+            worker_count=1,
         )
         self.assertFalse(self.controller.can_forward_from_step(4))
 
         self.controller.set_wizard_execution_config(
             is_deterministic=False,
             trials_per_wire=2,
+            stochastic_environment_mode="random_start",
             is_visualized=True,
             visualized_trials_count=2,
+            worker_count=1,
         )
         self.assertTrue(self.controller.can_forward_from_step(4))
+
+    def test_execution_validation_allows_multi_trial_deterministic_runs(self) -> None:
+        self.controller.set_wizard_execution_config(
+            is_deterministic=True,
+            trials_per_wire=3,
+            stochastic_environment_mode="random_start",
+            is_visualized=False,
+            visualized_trials_count=1,
+            worker_count=2,
+        )
+        self.assertTrue(self.controller.can_forward_from_step(4))
+        state = self.controller.get_wizard_state()
+        self.assertEqual(state.trials_per_wire, 3)
 
 
 if __name__ == "__main__":

@@ -6,13 +6,11 @@ import os
 import threading
 import unittest
 from pathlib import Path
-from dataclasses import replace
+from unittest.mock import patch
 
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QPushButton, QSpinBox
+from PyQt5.QtWidgets import QApplication
 from PyQt5.QtTest import QSignalSpy
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt
 
 from steve_recommender.eval_v2.models import (
     AorticArchAnatomy,
@@ -136,8 +134,6 @@ def _make_report(job_name: str = "test_job") -> EvaluationReport:
                 steps_total_mean=5.0,
                 steps_to_success_mean=3.0,
                 tip_speed_max_mean_mm_s=12.5,
-                wall_force_max_mean=None,
-                wall_force_max_mean_newton=None,
                 force_available_rate=0.0,
             ),
         ),
@@ -413,14 +409,16 @@ class ExecutionConfigPageTests(unittest.TestCase):
         self.assertFalse(self.page.live_card.isChecked())
 
     def test_runs_row_visibility_with_stochastic(self) -> None:
-        """Test that runs_row is visible when stochastic mode is selected."""
+        """Test that runs_row remains available for deterministic and stochastic modes."""
+        self.assertTrue(self.page.runs_row.isVisible())
+
         self.page.stochastic_card.click()
         QApplication.processEvents()  # Process signal
         self.assertTrue(self.page.runs_row.isVisible())
 
         self.page.deterministic_card.click()
         QApplication.processEvents()  # Process signal
-        self.assertFalse(self.page.runs_row.isVisible())
+        self.assertTrue(self.page.runs_row.isVisible())
 
     def test_visualized_runs_row_visibility(self) -> None:
         """Test that visualized_runs_row visibility depends on live mode and runs count."""
@@ -429,15 +427,18 @@ class ExecutionConfigPageTests(unittest.TestCase):
         QApplication.processEvents()
         self.assertFalse(self.page.visualized_runs_row.isVisible())
 
-        # Deterministic + Live: should not be visible (needs multiple runs)
+        # Deterministic + Live + runs = 1: should not be visible
         self.page.live_card.click()
         QApplication.processEvents()
         self.assertFalse(self.page.visualized_runs_row.isVisible())
 
-        # Stochastic + Live + runs > 1: should be visible
-        self.page.stochastic_card.click()
-        QApplication.processEvents()
+        # Deterministic + Live + runs > 1: should be visible
         self.page.runs_spin.setValue(2)
+        QApplication.processEvents()
+        self.assertTrue(self.page.visualized_runs_row.isVisible())
+
+        # Stochastic + Live + runs > 1: should remain visible
+        self.page.stochastic_card.click()
         QApplication.processEvents()
         self.assertTrue(self.page.visualized_runs_row.isVisible())
 
@@ -459,7 +460,6 @@ class ExecutionConfigPageTests(unittest.TestCase):
     def test_visualized_runs_spinbox_values(self) -> None:
         """Test that visualized_runs spinbox has valid range."""
         self.page.live_card.click()
-        self.page.stochastic_card.click()
         self.page.runs_spin.setValue(10)
         
         self.page.visualized_runs_spin.setValue(1)
@@ -467,6 +467,59 @@ class ExecutionConfigPageTests(unittest.TestCase):
 
         self.page.visualized_runs_spin.setValue(5)
         self.assertEqual(self.page.visualized_runs_spin.value(), 5)
+
+    def test_stochastic_environment_mode_control_visibility(self) -> None:
+        self.assertFalse(self.page.stochastic_env_mode_row.isVisible())
+
+        self.page.stochastic_card.click()
+        QApplication.processEvents()
+        self.assertFalse(self.page.stochastic_env_mode_row.isVisible())
+
+        self.page.runs_spin.setValue(2)
+        QApplication.processEvents()
+        self.assertTrue(self.page.stochastic_env_mode_row.isVisible())
+
+        self.page.deterministic_card.click()
+        QApplication.processEvents()
+        self.assertFalse(self.page.stochastic_env_mode_row.isVisible())
+
+    def test_stochastic_environment_mode_updates_controller_state(self) -> None:
+        self.page.stochastic_card.click()
+        self.page.runs_spin.setValue(3)
+        QApplication.processEvents()
+
+        self.page.stochastic_env_mode_combo.setCurrentText("Fixed Start, Randomized Policy")
+        QApplication.processEvents()
+
+        state = self.controller.get_wizard_state()
+        self.assertEqual(state.stochastic_environment_mode, "fixed_start")
+
+    def test_headless_mode_auto_selects_cpu_minus_five_workers(self) -> None:
+        wire_a = WireRef(model="steve_default", wire="standard_j")
+        wire_b = WireRef(model="universal_ii", wire="standard_j")
+        self.controller.set_wizard_selected_wires((wire_a, wire_b))
+
+        with patch("os.cpu_count", return_value=12):
+            self.page.stochastic_card.click()
+            self.page.runs_spin.setValue(10)
+            self.page.headless_card.click()
+            QApplication.processEvents()
+
+        state = self.controller.get_wizard_state()
+        self.assertEqual(state.worker_count, 7)
+
+    def test_live_mode_forces_single_worker(self) -> None:
+        wire = WireRef(model="steve_default", wire="standard_j")
+        self.controller.set_wizard_selected_wires((wire,))
+
+        with patch("os.cpu_count", return_value=32):
+            self.page.stochastic_card.click()
+            self.page.runs_spin.setValue(10)
+            self.page.live_card.click()
+            QApplication.processEvents()
+
+        state = self.controller.get_wizard_state()
+        self.assertEqual(state.worker_count, 1)
 
 
 class VisualizationIntegrationTests(unittest.TestCase):

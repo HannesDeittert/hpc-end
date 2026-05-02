@@ -8,17 +8,18 @@ from typing import Literal, Optional, Tuple, Union
 Vector3 = Tuple[float, float, float]
 RotationYZXDeg = Tuple[float, float, float]
 ScalingXYZD = Tuple[float, float, float, float]
-TargetModeKind = Literal["branch_end", "branch_index", "manual"]
+TargetModeKind = Literal["branch_end", "branch_index", "centerline_random", "manual"]
 
 PolicySourceKind = Literal["registry", "explicit"]
 PolicyMode = Literal["deterministic", "stochastic"]
+StochasticEnvironmentMode = Literal["fixed_start", "random_start"]
 SimulationBackend = Literal["single_process", "multiprocess"]
 ForceTelemetryMode = Literal[
     "passive",
     "intrusive_lcp",
     "constraint_projected_si_validated",
 ]
-ScoringMode = Literal["default_v1"]
+ScoringMode = Literal["ranking_v1"]
 
 
 def _require_non_empty(value: str, *, field_name: str) -> None:
@@ -44,6 +45,12 @@ def _require_positive(value: float, *, field_name: str) -> None:
 def _require_non_negative(value: float, *, field_name: str) -> None:
     if float(value) < 0.0:
         raise ValueError(f"{field_name} must be >= 0")
+
+
+def _default_tip_threshold_mm() -> float:
+    from .force_telemetry import DEFAULT_TIP_THRESHOLD_MM
+
+    return float(DEFAULT_TIP_THRESHOLD_MM)
 
 
 @dataclass(frozen=True)
@@ -269,6 +276,21 @@ class BranchIndexTarget:
 
 
 @dataclass(frozen=True)
+class CenterlineRandomTarget:
+    """Seeded ArchVar-style random centerline target."""
+
+    kind: Literal["centerline_random"] = "centerline_random"
+    threshold_mm: float = 5.0
+    branches: Tuple[str, ...] = ()
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        _require_positive(self.threshold_mm, field_name="threshold_mm")
+        for branch in self.branches:
+            _require_non_empty(branch, field_name="branches")
+
+
+@dataclass(frozen=True)
 class ManualTarget:
     """Manual vessel-coordinate targets for `eve.intervention.target.Manual`."""
 
@@ -288,7 +310,7 @@ class ManualTarget:
             )
 
 
-TargetSpec = Union[BranchEndTarget, BranchIndexTarget, ManualTarget]
+TargetSpec = Union[BranchEndTarget, BranchIndexTarget, CenterlineRandomTarget, ManualTarget]
 
 
 @dataclass(frozen=True)
@@ -314,22 +336,35 @@ class ForceCalibrationPolicy:
 
 @dataclass(frozen=True)
 class ForceTelemetrySpec:
-    """Wall-force extraction settings for `SofaWallForceInfo`."""
+    """Wall-force extraction settings for `SofaWallForceInfo`.
+
+    `tip_threshold_mm` is an absolute arc length from the distal end of the
+    wire, in mm. A collision DOF is classified as tip when its arc-length
+    distance from the distal end is less than or equal to this positive
+    threshold. `write_full_trace` controls always-on per-trial HDF5 trace
+    persistence under `<job_output_dir>/traces/`. `write_diagnostics` controls
+    optional heavy diagnostic groups inside those trace files.
+    """
 
     mode: ForceTelemetryMode = "passive"
     required: bool = False
     contact_epsilon: float = 1e-7
+    tip_threshold_mm: float = field(default_factory=_default_tip_threshold_mm)
+    write_full_trace: bool = True
+    write_diagnostics: bool = False
     plugin_path: Optional[Path] = None
     units: Optional[ForceUnits] = None
-    calibration: ForceCalibrationPolicy = field(
-        default_factory=ForceCalibrationPolicy
-    )
+    calibration: ForceCalibrationPolicy = field(default_factory=ForceCalibrationPolicy)
 
     def __post_init__(self) -> None:
         _require_non_negative(
             self.contact_epsilon,
             field_name="contact_epsilon",
         )
+        if float(self.tip_threshold_mm) <= 0.0:
+            raise ValueError(
+                f"tip_threshold_mm must be > 0, got {float(self.tip_threshold_mm)}"
+            )
         if self.mode == "constraint_projected_si_validated" and self.units is None:
             raise ValueError(
                 "units are required when mode='constraint_projected_si_validated'"
@@ -354,63 +389,262 @@ class VisualizationSpec:
 
 @dataclass(frozen=True)
 class ExecutionPlan:
-    """How scenarios are executed once candidates are resolved."""
+    """How scenarios are executed once candidates are resolved.
+
+    Seed management intentionally distinguishes between two independent sources
+    of randomness:
+
+    - environment seeds control reproducible reset state such as initial wire
+      orientation or insertion randomness inside the intervention scene,
+    - policy seeds control stochastic action sampling when `policy_mode` is
+      `"stochastic"`.
+
+    Every candidate in one job shares the exact same derived seed schedules so
+    candidate comparisons remain paired trial-by-trial.
+    """
 
     trials_per_candidate: int = 10
     base_seed: int = 123
     explicit_seeds: Tuple[int, ...] = ()
+    policy_base_seed: int = 1000
+    policy_explicit_seeds: Tuple[int, ...] = ()
     max_episode_steps: int = 1000
     policy_device: str = "cuda"
     policy_mode: PolicyMode = "deterministic"
+    stochastic_environment_mode: StochasticEnvironmentMode = "random_start"
     simulation_backend: SimulationBackend = "single_process"
     visualization: VisualizationSpec = field(default_factory=VisualizationSpec)
+    worker_count: int = 1
 
     def __post_init__(self) -> None:
         if self.trials_per_candidate < 1:
             raise ValueError("trials_per_candidate must be >= 1")
         if self.max_episode_steps < 1:
             raise ValueError("max_episode_steps must be >= 1")
+        if self.worker_count < 1:
+            raise ValueError("worker_count must be >= 1")
+        if self.visualization.enabled and self.worker_count > 1:
+            raise ValueError("worker_count > 1 is only supported for headless runs")
         _require_non_empty(self.policy_device, field_name="policy_device")
+        if (
+            self.explicit_seeds
+            and len(self.explicit_seeds) != self.trials_per_candidate
+        ):
+            raise ValueError(
+                "explicit_seeds must match trials_per_candidate "
+                f"({self.trials_per_candidate}), got {len(self.explicit_seeds)}"
+            )
+        if (
+            self.policy_explicit_seeds
+            and len(self.policy_explicit_seeds) != self.trials_per_candidate
+        ):
+            raise ValueError(
+                "policy_explicit_seeds must match trials_per_candidate "
+                f"({self.trials_per_candidate}), got {len(self.policy_explicit_seeds)}"
+            )
 
     @property
     def seeds(self) -> Tuple[int, ...]:
+        """Backward-compatible alias for environment seeds."""
+
+        return self.environment_seeds
+
+    @property
+    def environment_seeds(self) -> Tuple[int, ...]:
+        """Return the per-trial environment seed schedule.
+
+        Rules:
+        - `explicit_seeds` wins when provided.
+        - deterministic mode uses an incrementing sequence from `base_seed`.
+        - stochastic `fixed_start` keeps the environment constant across trials.
+        - stochastic `random_start` uses the incrementing sequence.
+        """
+
         if self.explicit_seeds:
             return self.explicit_seeds
-        return tuple(self.base_seed + offset for offset in range(self.trials_per_candidate))
+        if (
+            self.policy_mode == "stochastic"
+            and self.stochastic_environment_mode == "fixed_start"
+        ):
+            return tuple(self.base_seed for _ in range(self.trials_per_candidate))
+        return tuple(
+            self.base_seed + offset for offset in range(self.trials_per_candidate)
+        )
+
+    @property
+    def policy_seeds(self) -> Tuple[Optional[int], ...]:
+        """Return the per-trial policy seed schedule.
+
+        Deterministic policies disable policy sampling, so they do not carry
+        independent policy seeds. Stochastic policies either use the explicit
+        override or an incrementing sequence from `policy_base_seed`.
+        """
+
+        if self.policy_mode == "deterministic":
+            return tuple(None for _ in range(self.trials_per_candidate))
+        if self.policy_explicit_seeds:
+            return tuple(int(seed) for seed in self.policy_explicit_seeds)
+        return tuple(
+            self.policy_base_seed + offset
+            for offset in range(self.trials_per_candidate)
+        )
+
+    @property
+    def trial_seed_pairs(self) -> Tuple[Tuple[int, Optional[int]], ...]:
+        """Pair environment and policy seed schedules trial-by-trial."""
+
+        return tuple(zip(self.environment_seeds, self.policy_seeds))
+
+    def environment_seed_for_trial(self, trial_index: int) -> int:
+        """Resolve one environment seed for an arbitrary trial index.
+
+        The service normally iterates the precomputed schedule, but tests and
+        lower-level helpers may call into the runner directly with any
+        `trial_index`. This helper keeps that path deterministic and consistent
+        with the configured schedule semantics.
+        """
+
+        normalized_index = max(int(trial_index), 0)
+        if self.explicit_seeds:
+            if normalized_index < len(self.explicit_seeds):
+                return int(self.explicit_seeds[normalized_index])
+            return int(self.explicit_seeds[-1])
+        if (
+            self.policy_mode == "stochastic"
+            and self.stochastic_environment_mode == "fixed_start"
+        ):
+            return int(self.base_seed)
+        return int(self.base_seed + normalized_index)
+
+    def policy_seed_for_trial(self, trial_index: int) -> Optional[int]:
+        """Resolve one policy seed for an arbitrary trial index."""
+
+        if self.policy_mode == "deterministic":
+            return None
+        normalized_index = max(int(trial_index), 0)
+        if self.policy_explicit_seeds:
+            if normalized_index < len(self.policy_explicit_seeds):
+                return int(self.policy_explicit_seeds[normalized_index])
+            return int(self.policy_explicit_seeds[-1])
+        return int(self.policy_base_seed + normalized_index)
 
 
 @dataclass(frozen=True)
-class ScoreWeights:
-    """Category weights used by the current `default_v1` score."""
+class TrialIndicatorSpec:
+    """Hard constraints that decide whether a trial participates in ranking."""
 
-    success: float = 2.0
-    efficiency: float = 1.0
-    safety: float = 1.0
-    smoothness: float = 0.25
-    normalize: bool = True
+    requires_success: bool = True
+    requires_steps_within_episode_limit: bool = True
+    requires_force_available: bool = True
+    requires_force_within_safety_threshold: bool = True
 
 
 @dataclass(frozen=True)
-class ScoreScales:
-    """Scale parameters used by the current `default_v1` score."""
+class ForceScoringSpec:
+    """Force source selection and hard-threshold configuration."""
 
-    force_scale: float = 1.0
-    lcp_scale: float = 1.0
-    speed_scale_mm_s: float = 50.0
+    default_safety_force_source: str = "wire_force_normal_trial_max_N"
+    force_max_N: float = 2.0
+    tip_length_mm: float = field(default_factory=_default_tip_threshold_mm)
+    tip_force_definition: str = (
+        "maximum compressive normal contact force within distal tip region"
+    )
+    whole_wire_force_definition: str = (
+        "maximum surface-normal contact force component along the entire guidewire during the trial"
+    )
 
     def __post_init__(self) -> None:
-        _require_positive(self.force_scale, field_name="force_scale")
-        _require_positive(self.lcp_scale, field_name="lcp_scale")
-        _require_positive(self.speed_scale_mm_s, field_name="speed_scale_mm_s")
+        _require_non_empty(
+            self.default_safety_force_source,
+            field_name="default_safety_force_source",
+        )
+        _require_positive(self.force_max_N, field_name="force_max_N")
+        _require_positive(self.tip_length_mm, field_name="tip_length_mm")
+
+
+@dataclass(frozen=True)
+class SafetyScoreSpec:
+    """Parameters of the nonlinear safety scoring function."""
+
+    type: str = "nonlinear_product"
+    c: float = 0.30
+    p: float = 2.0
+    k: float = 10.0
+    F50_N: float = 1.55
+    F_max_N: float = 2.0
+
+    def __post_init__(self) -> None:
+        _require_non_empty(self.type, field_name="type")
+        _require_positive(self.p, field_name="p")
+        _require_positive(self.k, field_name="k")
+        _require_positive(self.F50_N, field_name="F50_N")
+        _require_positive(self.F_max_N, field_name="F_max_N")
+
+
+@dataclass(frozen=True)
+class EfficiencyScoreSpec:
+    """Configuration of the efficiency score."""
+
+    type: str = "steps_to_success_normalized_by_max_episode_steps"
+
+    def __post_init__(self) -> None:
+        _require_non_empty(self.type, field_name="type")
+
+
+@dataclass(frozen=True)
+class CandidateScoreSpec:
+    """How valid-trial soft scores are aggregated into one candidate score."""
+
+    lambda_: float = 1.0
+    beta: float = 0.0
+    default_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "score_success": 1.5,
+            "score_efficiency": 1.5,
+            "score_safety": 1.0,
+            "score_smoothness": 0.25,
+        }
+    )
+    active_components: Tuple[str, ...] = (
+        "score_success",
+        "score_efficiency",
+        "score_safety",
+        "score_smoothness",
+    )
+
+    def __post_init__(self) -> None:
+        _require_non_negative(self.lambda_, field_name="lambda_")
+        _require_non_negative(self.beta, field_name="beta")
+        if not self.default_weights:
+            raise ValueError("default_weights must not be empty")
+        if not self.active_components:
+            raise ValueError("active_components must not be empty")
+
+
+@dataclass(frozen=True)
+class SmoothnessScoreSpec:
+    """Optional jerk-based smoothness scoring configuration."""
+
+    jerk_scale_mm_s3: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.jerk_scale_mm_s3 is not None:
+            _require_positive(self.jerk_scale_mm_s3, field_name="jerk_scale_mm_s3")
 
 
 @dataclass(frozen=True)
 class ScoringSpec:
-    """Current scoring configuration, grouped for GUI slider control."""
+    """Current eval_v2 scoring configuration persisted into manifest.json."""
 
-    mode: ScoringMode = "default_v1"
-    weights: ScoreWeights = field(default_factory=ScoreWeights)
-    scales: ScoreScales = field(default_factory=ScoreScales)
+    mode: ScoringMode = "ranking_v1"
+    trial_indicator: TrialIndicatorSpec = field(default_factory=TrialIndicatorSpec)
+    force: ForceScoringSpec = field(default_factory=ForceScoringSpec)
+    safety_score: SafetyScoreSpec = field(default_factory=SafetyScoreSpec)
+    efficiency_score: EfficiencyScoreSpec = field(default_factory=EfficiencyScoreSpec)
+    candidate_score: CandidateScoreSpec = field(default_factory=CandidateScoreSpec)
+    smoothness_score: SmoothnessScoreSpec = field(
+        default_factory=SmoothnessScoreSpec
+    )
 
 
 @dataclass(frozen=True)
@@ -453,6 +687,7 @@ class EvaluationJob:
     execution: ExecutionPlan = field(default_factory=ExecutionPlan)
     scoring: ScoringSpec = field(default_factory=ScoringSpec)
     output_root: Path = Path("results/eval_runs")
+    resume_output_dir: Optional[Path] = None
 
     def __post_init__(self) -> None:
         _require_non_empty(self.name, field_name="name")
@@ -464,13 +699,13 @@ class EvaluationJob:
 
 @dataclass(frozen=True)
 class ScoreBreakdown:
-    """Per-trial score and its current component scores."""
+    """Per-trial score and component scores."""
 
     total: float
     success: float
     efficiency: float
     safety: Optional[float]
-    smoothness: float
+    smoothness: Optional[float]
 
 
 @dataclass(frozen=True)
@@ -500,19 +735,34 @@ class ForceTelemetrySummary:
     collision_force_norm_mean: Optional[float] = None
     total_force_norm_max: Optional[float] = None
     total_force_norm_mean: Optional[float] = None
-    total_force_norm_max_newton: Optional[float] = None
-    total_force_norm_mean_newton: Optional[float] = None
     peak_segment_force_norm: Optional[float] = None
-    peak_segment_force_norm_newton: Optional[float] = None
     peak_segment_force_step: Optional[int] = None
     peak_segment_force_segment_id: Optional[int] = None
     peak_segment_force_time_s: Optional[float] = None
+    wire_force_magnitude_instant_N: Optional[float] = None
+    wire_force_magnitude_trial_max_N: Optional[float] = None
+    wire_force_magnitude_trial_mean_N: Optional[float] = None
+    wire_force_normal_instant_N: Optional[float] = None
+    wire_force_normal_trial_max_N: Optional[float] = None
+    wire_force_normal_trial_mean_N: Optional[float] = None
+    tip_force_magnitude_instant_N: Optional[float] = None
+    tip_force_magnitude_trial_max_N: Optional[float] = None
+    tip_force_magnitude_trial_mean_N: Optional[float] = None
+    tip_force_normal_instant_N: Optional[float] = None
+    tip_force_normal_trial_max_N: Optional[float] = None
+    tip_force_normal_trial_mean_N: Optional[float] = None
     gap_active_projected_count_sum: int = 0
     gap_explicit_mapped_count_sum: int = 0
     gap_unmapped_count_sum: int = 0
     gap_unmapped_ratio: Optional[float] = None
     gap_dominant_class: str = "none"
     gap_contact_mode: str = "none"
+    tip_force_available: bool = False
+    tip_force_validation_status: str = "unmapped"
+    tip_force_records: Tuple[dict, ...] = ()
+    tip_force_total_vector_N: Vector3 = (0.0, 0.0, 0.0)
+    lcp_mapped_wall_row_count_max: int = 0
+    lcp_contact_export_coverage: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -523,6 +773,7 @@ class TrialTelemetrySummary:
     steps_total: int
     steps_to_success: Optional[int]
     episode_reward: float
+    end_reason: str = "unknown"
     wall_time_s: Optional[float] = None
     sim_time_s: Optional[float] = None
     path_ratio_last: Optional[float] = None
@@ -530,6 +781,11 @@ class TrialTelemetrySummary:
     average_translation_speed_last: Optional[float] = None
     tip_speed_max_mm_s: Optional[float] = None
     tip_speed_mean_mm_s: Optional[float] = None
+    tip_total_distance_mm: Optional[float] = None
+    tip_acc_p95: Optional[float] = None
+    tip_acc_max: Optional[float] = None
+    tip_jerk_p95: Optional[float] = None
+    tip_jerk_max: Optional[float] = None
     forces: Optional[ForceTelemetrySummary] = None
 
 
@@ -538,13 +794,14 @@ class TrialArtifactPaths:
     """Filesystem artifacts emitted for one executed trial."""
 
     trace_npz_path: Optional[Path] = None
+    trace_h5_path: Optional[Path] = None
     force_gap_json_path: Optional[Path] = None
     force_gap_csv_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)
 class TrialResult:
-    """One candidate/scenario/seed execution result."""
+    """One candidate/scenario/trial-seed execution result."""
 
     scenario_name: str
     candidate_name: str
@@ -554,7 +811,11 @@ class TrialResult:
     seed: int
     score: ScoreBreakdown
     telemetry: TrialTelemetrySummary
+    policy_seed: Optional[int] = None
+    valid_for_ranking: bool = False
+    force_within_safety_threshold: bool = False
     artifacts: TrialArtifactPaths = field(default_factory=TrialArtifactPaths)
+    warnings: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -566,15 +827,18 @@ class CandidateSummary:
     execution_wire: WireRef
     trained_on_wire: Optional[WireRef]
     trial_count: int
-    success_rate: Optional[float]
-    score_mean: Optional[float]
-    score_std: Optional[float]
-    steps_total_mean: Optional[float]
-    steps_to_success_mean: Optional[float]
-    tip_speed_max_mean_mm_s: Optional[float]
-    wall_force_max_mean: Optional[float]
-    wall_force_max_mean_newton: Optional[float]
-    force_available_rate: Optional[float]
+    success_rate: Optional[float] = None
+    valid_rate: Optional[float] = None
+    soft_score_mean_valid: Optional[float] = None
+    soft_score_std_valid: Optional[float] = None
+    candidate_score_final: Optional[float] = None
+    score_mean: Optional[float] = None
+    score_std: Optional[float] = None
+    steps_total_mean: Optional[float] = None
+    steps_to_success_mean: Optional[float] = None
+    tip_speed_max_mean_mm_s: Optional[float] = None
+    wire_force_normal_trial_max_mean_N: Optional[float] = None
+    force_available_rate: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -582,9 +846,13 @@ class EvaluationArtifacts:
     """Top-level files written by an evaluation run."""
 
     output_dir: Path
-    summary_csv_path: Optional[Path] = None
-    report_json_path: Optional[Path] = None
+    candidate_summaries_csv_path: Optional[Path] = None
+    candidate_summaries_json_path: Optional[Path] = None
+    manifest_json_path: Optional[Path] = None
+    trials_h5_path: Optional[Path] = None
     report_markdown_path: Optional[Path] = None
+    traces_dir: Optional[Path] = None
+    meshes_dir: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -595,18 +863,20 @@ class EvaluationReport:
     generated_at: str
     summaries: Tuple[CandidateSummary, ...]
     trials: Tuple[TrialResult, ...]
+    execution_plan: Optional[ExecutionPlan] = None
+    scoring_spec: Optional[ScoringSpec] = None
     artifacts: Optional[EvaluationArtifacts] = None
 
 
 @dataclass(frozen=True)
 class HistoricalReportSummary:
-    """Lightweight metadata for one persisted report on disk."""
+    """Lightweight metadata for one persisted manifest on disk."""
 
     job_name: str
     generated_at: str
     anatomy: str
     tested_wires: Tuple[str, ...]
-    report_json_path: Path
+    manifest_json_path: Path
     output_dir: Path
 
 
@@ -616,7 +886,10 @@ __all__ = [
     "AgentRef",
     "BranchEndTarget",
     "BranchIndexTarget",
+    "CenterlineRandomTarget",
     "CandidateSummary",
+    "CandidateScoreSpec",
+    "EfficiencyScoreSpec",
     "EvaluationArtifacts",
     "EvaluationCandidate",
     "EvaluationJob",
@@ -633,11 +906,13 @@ __all__ = [
     "ManualTarget",
     "PolicySpec",
     "ScoreBreakdown",
-    "ScoreScales",
-    "ScoreWeights",
+    "ForceScoringSpec",
+    "SafetyScoreSpec",
     "ScoringSpec",
+    "SmoothnessScoreSpec",
     "TargetSpec",
     "TargetModeDescriptor",
+    "TrialIndicatorSpec",
     "TrialArtifactPaths",
     "TrialResult",
     "TrialTelemetrySummary",

@@ -4,6 +4,7 @@ import argparse
 
 from steve_recommender.anatomy.aortic_arch_dataset import (
     generate_aortic_arch_records,
+    rebuild_anatomy_registry_index,
     load_aortic_arch_dataset,
     next_record_index,
 )
@@ -42,12 +43,21 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Print progress every N generated records (default: 100).",
     )
+    parser.add_argument(
+        "--rebuild-index-only",
+        action="store_true",
+        help="Skip generation and rebuild index.json from anatomy folders already on disk.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     dataset = load_aortic_arch_dataset(args.output)
+    if args.rebuild_index_only:
+        path = rebuild_anatomy_registry_index(root=dataset.root)
+        print(f"[aortic_arch_dataset] rebuilt index: {path / 'index.json'}")
+        return
     start_index = int(args.start_index)
     if args.resume:
         start_index = next_record_index(dataset)

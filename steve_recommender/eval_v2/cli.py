@@ -3,20 +3,30 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, TextIO, Tuple
+from typing import Optional, Sequence, TextIO, Tuple
 
+from .force_telemetry import DEFAULT_TIP_THRESHOLD_MM
 from .models import (
     AgentRef,
     AorticArchAnatomy,
     BranchEndTarget,
     BranchIndexTarget,
+    CenterlineRandomTarget,
+    CandidateScoreSpec,
+    EfficiencyScoreSpec,
     EvaluationCandidate,
     EvaluationJob,
     EvaluationScenario,
     ExecutionPlan,
+    ForceScoringSpec,
     FluoroscopySpec,
+    ForceTelemetrySpec,
     ManualTarget,
     PolicySpec,
+    SafetyScoreSpec,
+    ScoringSpec,
+    SmoothnessScoreSpec,
+    TrialIndicatorSpec,
     VisualizationSpec,
     WireRef,
 )
@@ -51,6 +61,25 @@ def _parse_branch_names(text: str) -> Tuple[str, ...]:
     return branches
 
 
+def _parse_seed_list(text: str, *, flag_name: str) -> Tuple[int, ...]:
+    parts = tuple(part.strip() for part in str(text).split(",") if part.strip())
+    if not parts:
+        raise ValueError(f"{flag_name} must include at least one integer seed")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError(
+            f"{flag_name} must be a comma-separated list of integers"
+        ) from exc
+
+
+def _parse_wire_refs(texts: Sequence[str]) -> Tuple[WireRef, ...]:
+    wires = tuple(_parse_wire_ref(text) for text in texts)
+    if not wires:
+        raise ValueError("at least one execution wire must be provided")
+    return wires
+
+
 def _format_optional(value: object) -> str:
     if value is None:
         return "n/a"
@@ -76,14 +105,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show only wires that currently have at least one loadable agent",
     )
 
-    policies_parser = subparsers.add_parser("list-policies", help="List discoverable policies")
+    policies_parser = subparsers.add_parser(
+        "list-policies", help="List discoverable policies"
+    )
     policies_parser.add_argument(
         "--execution-wire",
         default=None,
         help="Optional wire ref filter formatted as 'model/wire'",
     )
 
-    candidates_parser = subparsers.add_parser("list-candidates", help="List candidate options")
+    candidates_parser = subparsers.add_parser(
+        "list-candidates", help="List candidate options"
+    )
     candidates_parser.add_argument(
         "--execution-wire",
         required=True,
@@ -95,7 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exclude policies trained on different wires",
     )
 
-    branches_parser = subparsers.add_parser("list-branches", help="List branches for one anatomy")
+    branches_parser = subparsers.add_parser(
+        "list-branches", help="List branches for one anatomy"
+    )
     branches_parser.add_argument(
         "--anatomy",
         required=True,
@@ -106,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Build and execute one eval_v2 job")
     run_parser.add_argument("--job-name", default="eval_v2_job")
+    run_parser.add_argument(
+        "--resume-output-dir",
+        default=None,
+        help="Resume an interrupted eval_v2 job from an existing output directory.",
+    )
     run_parser.add_argument("--scenario-name", default="scenario")
     run_parser.add_argument("--candidate-label", default=None)
     run_parser.add_argument(
@@ -116,10 +156,16 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--execution-wire",
         required=True,
-        help="Execution wire formatted as 'model/wire'",
+        action="append",
+        dest="execution_wires",
+        metavar="WIRE",
+        help=(
+            "Execution wire formatted as 'model/wire'. Repeat the flag to "
+            "compare multiple wires in one run."
+        ),
     )
 
-    policy_group = run_parser.add_mutually_exclusive_group(required=True)
+    policy_group = run_parser.add_mutually_exclusive_group(required=False)
     policy_group.add_argument(
         "--candidate-name",
         default=None,
@@ -154,12 +200,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--target-mode",
         required=True,
-        choices=("branch_end", "branch_index", "manual"),
+        choices=("branch_end", "branch_index", "centerline_random", "manual"),
     )
     run_parser.add_argument(
         "--target-branches",
         default=None,
-        help="Comma-separated branches for branch_end mode",
+        help="Comma-separated branches for branch_end or centerline_random mode",
+    )
+    run_parser.add_argument(
+        "--target-seed",
+        type=int,
+        default=None,
+        help="Fixed seed for centerline_random target sampling.",
     )
     run_parser.add_argument(
         "--target-branch",
@@ -181,16 +233,79 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--threshold-mm", type=float, default=5.0)
 
     run_parser.add_argument("--trial-count", type=int, default=10)
-    run_parser.add_argument("--base-seed", type=int, default=123)
-    run_parser.add_argument("--max-episode-steps", type=int, default=1000)
+    run_parser.add_argument(
+        "--base-seed", "--env-base-seed", dest="base_seed", type=int, default=123
+    )
+    run_parser.add_argument(
+        "--env-seeds",
+        default=None,
+        help="Optional comma-separated explicit environment seed list; length must match --trial-count",
+    )
+    run_parser.add_argument(
+        "--policy-base-seed",
+        type=int,
+        default=1000,
+        help="Base seed for stochastic policy sampling when --policy-mode stochastic is used",
+    )
+    run_parser.add_argument(
+        "--policy-seeds",
+        default=None,
+        help="Optional comma-separated explicit policy seed list; length must match --trial-count",
+    )
+    run_parser.add_argument("--max-episode-steps", type=int, default=450)
+    run_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel CPU worker processes for headless evaluation.",
+    )
     run_parser.add_argument("--policy-device", default="cpu")
     run_parser.add_argument(
         "--policy-mode",
         choices=("deterministic", "stochastic"),
         default="deterministic",
     )
+    run_parser.add_argument(
+        "--stochastic-env-mode",
+        choices=("fixed_start", "random_start"),
+        default="random_start",
+        help="When stochastic mode uses multiple trials, keep environment fixed or vary it across trials",
+    )
 
     run_parser.add_argument("--friction", type=float, default=0.001)
+    run_parser.add_argument(
+        "--tip-length-mm",
+        type=float,
+        default=DEFAULT_TIP_THRESHOLD_MM,
+        help=(
+            "Distal tip arc-length threshold in mm for force telemetry "
+            f"(default: {DEFAULT_TIP_THRESHOLD_MM})"
+        ),
+    )
+    run_parser.add_argument("--force-max-N", type=float, default=2.0)
+    run_parser.add_argument("--force-score-c", type=float, default=0.30)
+    run_parser.add_argument("--force-score-p", type=float, default=2.0)
+    run_parser.add_argument("--force-score-k", type=float, default=10.0)
+    run_parser.add_argument("--force-score-F50-N", type=float, default=1.55)
+    run_parser.add_argument("--score-lambda", dest="score_lambda", type=float, default=1.0)
+    run_parser.add_argument("--score-beta", type=float, default=0.0)
+    run_parser.add_argument("--score-weight-safety", type=float, default=0.5)
+    run_parser.add_argument("--score-weight-efficiency", type=float, default=0.5)
+    run_parser.add_argument("--jerk-scale-mm-s3", type=float, default=None)
+    run_parser.add_argument(
+        "--no-write-trace",
+        action="store_false",
+        dest="write_full_trace",
+        default=True,
+        help="Disable per-trial HDF5 trace writing.",
+    )
+    run_parser.add_argument(
+        "--write-diagnostics",
+        action="store_true",
+        dest="write_diagnostics",
+        default=False,
+        help="Include optional diagnostic datasets in trial trace files.",
+    )
     run_parser.add_argument("--image-frequency-hz", type=float, default=7.5)
     run_parser.add_argument("--image-rot-z-deg", type=float, default=20.0)
     run_parser.add_argument("--image-rot-x-deg", type=float, default=5.0)
@@ -251,14 +366,20 @@ def _select_policy_for_run(
     execution_wire: WireRef,
 ) -> EvaluationCandidate | PolicySpec:
     if args.policy_agent_ref is not None:
-        return service.resolve_policy_from_agent_ref(_parse_agent_ref(args.policy_agent_ref))
+        return service.resolve_policy_from_agent_ref(
+            _parse_agent_ref(args.policy_agent_ref)
+        )
 
     if args.candidate_name is not None:
         candidates = service.list_candidates(
             execution_wire=execution_wire,
             include_cross_wire=True,
         )
-        matches = tuple(candidate for candidate in candidates if candidate.name == args.candidate_name)
+        matches = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.name == args.candidate_name
+        )
         if len(matches) != 1:
             raise ValueError(
                 f"Expected exactly one candidate named {args.candidate_name!r}, found {len(matches)}"
@@ -267,7 +388,9 @@ def _select_policy_for_run(
 
     if args.policy_name is not None:
         policies = service.list_registry_policies() + service.list_explicit_policies()
-        matches = tuple(policy for policy in policies if policy.name == args.policy_name)
+        matches = tuple(
+            policy for policy in policies if policy.name == args.policy_name
+        )
         if len(matches) != 1:
             raise ValueError(
                 f"Expected exactly one policy named {args.policy_name!r}, found {len(matches)}; use --policy-agent-ref or --policy-checkpoint to disambiguate"
@@ -301,6 +424,30 @@ def _select_policy_for_run(
     )
 
 
+def _select_candidates_for_multi_wire_run(
+    *,
+    service: EvaluationService,
+    execution_wires: Sequence[WireRef],
+) -> Tuple[EvaluationCandidate, ...]:
+    candidates: list[EvaluationCandidate] = []
+    for wire in execution_wires:
+        wire_candidates = service.list_candidates(
+            execution_wire=wire,
+            include_cross_wire=False,
+        )
+        valid_candidates = tuple(
+            candidate
+            for candidate in wire_candidates
+            if Path(candidate.policy.checkpoint_path).exists()
+        )
+        if not valid_candidates:
+            raise ValueError(
+                f"No valid candidates found for execution wire {wire.tool_ref}"
+            )
+        candidates.append(valid_candidates[0])
+    return tuple(candidates)
+
+
 def _build_target_spec(
     *,
     args: argparse.Namespace,
@@ -313,7 +460,9 @@ def _build_target_spec(
 
     if args.target_mode == "branch_end":
         if args.target_branches is None:
-            raise ValueError("--target-branches is required for target_mode='branch_end'")
+            raise ValueError(
+                "--target-branches is required for target_mode='branch_end'"
+            )
         branches = _parse_branch_names(args.target_branches)
         for branch_name in branches:
             service.get_branch(anatomy, branch_name=branch_name)
@@ -324,14 +473,35 @@ def _build_target_spec(
 
     if args.target_mode == "branch_index":
         if args.target_branch is None:
-            raise ValueError("--target-branch is required for target_mode='branch_index'")
+            raise ValueError(
+                "--target-branch is required for target_mode='branch_index'"
+            )
         if args.target_index is None:
-            raise ValueError("--target-index is required for target_mode='branch_index'")
+            raise ValueError(
+                "--target-index is required for target_mode='branch_index'"
+            )
         service.get_branch(anatomy, branch_name=args.target_branch)
         return BranchIndexTarget(
             branch=args.target_branch,
             index=int(args.target_index),
             threshold_mm=float(args.threshold_mm),
+        )
+
+    if args.target_mode == "centerline_random":
+        if args.target_seed is None:
+            raise ValueError("--target-seed is required for target_mode='centerline_random'")
+        if args.target_branches is None:
+            branches = tuple(branch.name for branch in service.list_branches(anatomy))
+        else:
+            branches = _parse_branch_names(args.target_branches)
+        if not branches:
+            raise ValueError("centerline_random requires at least one branch")
+        for branch_name in branches:
+            service.get_branch(anatomy, branch_name=branch_name)
+        return CenterlineRandomTarget(
+            threshold_mm=float(args.threshold_mm),
+            branches=branches,
+            seed=int(args.target_seed),
         )
 
     if not args.manual_target:
@@ -360,7 +530,11 @@ def _handle_list_wires(
     service: EvaluationService,
     stdout: TextIO,
 ) -> int:
-    wires = service.list_startable_wires() if args.startable_only else service.list_execution_wires()
+    wires = (
+        service.list_startable_wires()
+        if args.startable_only
+        else service.list_execution_wires()
+    )
     for wire in wires:
         _write(stdout, f"{wire.tool_ref}")
     return 0
@@ -371,10 +545,12 @@ def _handle_list_policies(
     service: EvaluationService,
     stdout: TextIO,
 ) -> int:
-    execution_wire = None if args.execution_wire is None else _parse_wire_ref(args.execution_wire)
-    policies = service.list_registry_policies(execution_wire=execution_wire) + service.list_explicit_policies(
-        execution_wire=execution_wire
+    execution_wire = (
+        None if args.execution_wire is None else _parse_wire_ref(args.execution_wire)
     )
+    policies = service.list_registry_policies(
+        execution_wire=execution_wire
+    ) + service.list_explicit_policies(execution_wire=execution_wire)
     for policy in policies:
         _write(
             stdout,
@@ -382,7 +558,11 @@ def _handle_list_policies(
                 name=policy.name,
                 source=policy.source,
                 agent_ref=policy.agent_ref or "unknown",
-                trained_on=policy.trained_on_wire.tool_ref if policy.trained_on_wire else "unknown",
+                trained_on=(
+                    policy.trained_on_wire.tool_ref
+                    if policy.trained_on_wire
+                    else "unknown"
+                ),
                 checkpoint=policy.checkpoint_path,
             ),
         )
@@ -459,22 +639,84 @@ def _handle_run(
     service: EvaluationService,
     stdout: TextIO,
 ) -> int:
-    anatomy = service.get_anatomy(record_id=args.anatomy)
-    execution_wire = _parse_wire_ref(args.execution_wire)
-    target = _build_target_spec(args=args, service=service, anatomy=anatomy)
-    selected = _select_policy_for_run(
-        args=args,
-        service=service,
-        execution_wire=execution_wire,
+    if int(args.workers) < 1:
+        raise ValueError("--workers must be >= 1")
+    if bool(args.visualize) and int(args.workers) > 1:
+        raise ValueError("--workers > 1 is only supported for non-visualized runs")
+    explicit_env_seeds = (
+        ()
+        if args.env_seeds is None
+        else _parse_seed_list(args.env_seeds, flag_name="--env-seeds")
     )
-    if isinstance(selected, EvaluationCandidate):
-        candidate = selected
-    else:
-        candidate = service.build_candidate(
-            name=args.candidate_label or selected.name,
-            execution_wire=execution_wire,
-            policy=selected,
+    explicit_policy_seeds = (
+        ()
+        if args.policy_seeds is None
+        else _parse_seed_list(args.policy_seeds, flag_name="--policy-seeds")
+    )
+    if explicit_env_seeds and len(explicit_env_seeds) != int(args.trial_count):
+        raise ValueError(
+            "--env-seeds length must match --trial-count "
+            f"({int(args.trial_count)}), got {len(explicit_env_seeds)}"
         )
+    if explicit_policy_seeds and len(explicit_policy_seeds) != int(args.trial_count):
+        raise ValueError(
+            "--policy-seeds length must match --trial-count "
+            f"({int(args.trial_count)}), got {len(explicit_policy_seeds)}"
+        )
+
+    execution_wires = _parse_wire_refs(args.execution_wires)
+    anatomy = service.get_anatomy(record_id=args.anatomy)
+    target = _build_target_spec(args=args, service=service, anatomy=anatomy)
+    if len(execution_wires) > 1:
+        if any(
+            value is not None
+            for value in (
+                args.candidate_name,
+                args.policy_name,
+                args.policy_agent_ref,
+                args.policy_checkpoint,
+            )
+        ):
+            raise ValueError(
+                "When multiple execution wires are provided, do not set "
+                "--candidate-name, --policy-name, --policy-agent-ref, or "
+                "--policy-checkpoint; eval_v2 will select the first valid "
+                "candidate for each wire, matching the GUI"
+            )
+        candidates = _select_candidates_for_multi_wire_run(
+            service=service,
+            execution_wires=execution_wires,
+        )
+    else:
+        execution_wire = execution_wires[0]
+        if not any(
+            value is not None
+            for value in (
+                args.candidate_name,
+                args.policy_name,
+                args.policy_agent_ref,
+                args.policy_checkpoint,
+            )
+        ):
+            raise ValueError(
+                "For a single execution wire, provide one of "
+                "--candidate-name, --policy-name, --policy-agent-ref, or "
+                "--policy-checkpoint"
+            )
+        selected = _select_policy_for_run(
+            args=args,
+            service=service,
+            execution_wire=execution_wire,
+        )
+        if isinstance(selected, EvaluationCandidate):
+            candidate = selected
+        else:
+            candidate = service.build_candidate(
+                name=args.candidate_label or selected.name,
+                execution_wire=execution_wire,
+                policy=selected,
+            )
+        candidates = (candidate,)
 
     scenario = EvaluationScenario(
         name=args.scenario_name,
@@ -487,27 +729,76 @@ def _handle_run(
         friction=float(args.friction),
         stop_device_at_tree_end=bool(args.stop_device_at_tree_end),
         normalize_action=bool(args.normalize_action),
+        force_telemetry=ForceTelemetrySpec(
+            tip_threshold_mm=float(args.tip_length_mm),
+            write_full_trace=bool(args.write_full_trace),
+            write_diagnostics=bool(args.write_diagnostics),
+        ),
     )
     job = EvaluationJob(
         name=args.job_name,
         scenarios=(scenario,),
-        candidates=(candidate,),
+        candidates=candidates,
         execution=ExecutionPlan(
             trials_per_candidate=int(args.trial_count),
             base_seed=int(args.base_seed),
+            explicit_seeds=explicit_env_seeds,
+            policy_base_seed=int(args.policy_base_seed),
+            policy_explicit_seeds=explicit_policy_seeds,
             max_episode_steps=int(args.max_episode_steps),
             policy_device=str(args.policy_device),
             policy_mode=str(args.policy_mode),
+            stochastic_environment_mode=str(args.stochastic_env_mode),
             visualization=VisualizationSpec(
                 enabled=bool(args.visualize),
                 rendered_trials_per_candidate=int(args.visualize_trials_per_candidate),
             ),
+            worker_count=int(args.workers),
+        ),
+        scoring=ScoringSpec(
+            trial_indicator=TrialIndicatorSpec(),
+            force=ForceScoringSpec(
+                force_max_N=float(args.force_max_N),
+                tip_length_mm=float(args.tip_length_mm),
+            ),
+            safety_score=SafetyScoreSpec(
+                c=float(args.force_score_c),
+                p=float(args.force_score_p),
+                k=float(args.force_score_k),
+                F50_N=float(args.force_score_F50_N),
+                F_max_N=float(args.force_max_N),
+            ),
+            efficiency_score=EfficiencyScoreSpec(),
+            candidate_score=CandidateScoreSpec(
+                lambda_=float(args.score_lambda),
+                beta=float(args.score_beta),
+                default_weights={
+                    "score_safety": float(args.score_weight_safety),
+                    "score_efficiency": float(args.score_weight_efficiency),
+                },
+                active_components=("score_safety", "score_efficiency"),
+            ),
+            smoothness_score=SmoothnessScoreSpec(
+                jerk_scale_mm_s3=(
+                    None
+                    if args.jerk_scale_mm_s3 is None
+                    else float(args.jerk_scale_mm_s3)
+                )
+            ),
         ),
         output_root=Path(args.output_root),
+        resume_output_dir=(
+            None if args.resume_output_dir is None else Path(args.resume_output_dir)
+        ),
     )
     report = service.run_evaluation_job(job)
-    _write(stdout, f"[eval_v2] job={report.job_name} generated_at={report.generated_at}")
-    _write(stdout, f"[eval_v2] summaries={len(report.summaries)} trials={len(report.trials)}")
+    _write(
+        stdout, f"[eval_v2] job={report.job_name} generated_at={report.generated_at}"
+    )
+    _write(
+        stdout,
+        f"[eval_v2] summaries={len(report.summaries)} trials={len(report.trials)}",
+    )
     if report.artifacts is not None:
         _write(stdout, f"[eval_v2] output_dir={report.artifacts.output_dir}")
     for summary in report.summaries:

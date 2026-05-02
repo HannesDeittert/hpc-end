@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from steve_recommender.eval_v2.cli import run_cli
+from steve_recommender.eval_v2.force_telemetry import DEFAULT_TIP_THRESHOLD_MM
 from steve_recommender.eval_v2.models import (
     AgentRef,
     AnatomyBranch,
@@ -15,7 +16,6 @@ from steve_recommender.eval_v2.models import (
     EvaluationCandidate,
     EvaluationJob,
     EvaluationReport,
-    EvaluationScenario,
     ManualTarget,
     PolicySpec,
     TargetModeDescriptor,
@@ -64,13 +64,15 @@ class _ServiceStub:
                     trained_on_wire=self.execution_wire,
                     trial_count=2,
                     success_rate=0.5,
+                    valid_rate=0.5,
+                    soft_score_mean_valid=0.75,
+                    soft_score_std_valid=0.1,
+                    candidate_score_final=0.75,
                     score_mean=0.75,
                     score_std=0.1,
                     steps_total_mean=5.0,
                     steps_to_success_mean=4.0,
                     tip_speed_max_mean_mm_s=20.0,
-                    wall_force_max_mean=None,
-                    wall_force_max_mean_newton=None,
                     force_available_rate=0.0,
                 ),
             ),
@@ -154,7 +156,9 @@ class _ServiceStub:
             policy=policy,
         )
 
-    def list_candidates(self, *, execution_wire: WireRef, include_cross_wire: bool = True):
+    def list_candidates(
+        self, *, execution_wire: WireRef, include_cross_wire: bool = True
+    ):
         _ = include_cross_wire
         return (
             EvaluationCandidate(
@@ -218,6 +222,8 @@ class CliAdapterTests(unittest.TestCase):
                 "run",
                 "--job-name",
                 "job_x",
+                "--resume-output-dir",
+                "/tmp/eval_resume_job",
                 "--scenario-name",
                 "scenario_x",
                 "--anatomy",
@@ -266,11 +272,14 @@ class CliAdapterTests(unittest.TestCase):
         job = service.jobs[0]
         self.assertEqual(job.name, "job_x")
         self.assertEqual(job.output_root, Path("/tmp/eval_runs"))
+        self.assertEqual(job.resume_output_dir, Path("/tmp/eval_resume_job"))
         self.assertEqual(job.execution.trials_per_candidate, 3)
         self.assertEqual(job.execution.base_seed, 500)
         self.assertEqual(job.execution.max_episode_steps, 75)
         self.assertEqual(job.execution.policy_device, "cpu")
         self.assertEqual(job.execution.policy_mode, "deterministic")
+        self.assertEqual(job.execution.environment_seeds, (500, 501, 502))
+        self.assertEqual(job.execution.policy_seeds, (None, None, None))
 
         scenario = job.scenarios[0]
         self.assertEqual(scenario.name, "scenario_x")
@@ -329,11 +338,139 @@ class CliAdapterTests(unittest.TestCase):
             ((1.0, 2.0, 3.0), (4.0, 5.0, 6.0)),
         )
         self.assertEqual(candidate.policy.name, "manual_policy")
-        self.assertEqual(candidate.policy.checkpoint_path, Path("/tmp/manual_policy.everl"))
+        self.assertEqual(
+            candidate.policy.checkpoint_path, Path("/tmp/manual_policy.everl")
+        )
         self.assertEqual(candidate.policy.source, "explicit")
         self.assertEqual(candidate.policy.trained_on_wire, service.cross_wire)
 
-    def test_run_command_can_select_policy_by_agent_ref_when_names_collide(self) -> None:
+    def test_run_command_accepts_explicit_environment_and_policy_seed_lists(
+        self,
+    ) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--trial-count",
+                "3",
+                "--env-seeds",
+                "123,999,42",
+                "--policy-mode",
+                "stochastic",
+                "--policy-seeds",
+                "1000,1001,1002",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        job = service.jobs[0]
+        self.assertEqual(job.execution.environment_seeds, (123, 999, 42))
+        self.assertEqual(job.execution.policy_seeds, (1000, 1001, 1002))
+
+    def test_run_command_accepts_fixed_start_stochastic_mode(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--trial-count",
+                "3",
+                "--base-seed",
+                "123",
+                "--policy-mode",
+                "stochastic",
+                "--policy-base-seed",
+                "1000",
+                "--stochastic-env-mode",
+                "fixed_start",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        job = service.jobs[0]
+        self.assertEqual(job.execution.environment_seeds, (123, 123, 123))
+        self.assertEqual(job.execution.policy_seeds, (1000, 1001, 1002))
+
+    def test_run_command_rejects_environment_seed_list_length_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "env-seeds"):
+            run_cli(
+                [
+                    "run",
+                    "--anatomy",
+                    "Tree_00",
+                    "--execution-wire",
+                    "steve_default/standard_j",
+                    "--policy-name",
+                    "policy_a",
+                    "--target-mode",
+                    "branch_end",
+                    "--target-branches",
+                    "lcca",
+                    "--trial-count",
+                    "3",
+                    "--env-seeds",
+                    "123,999",
+                ],
+                service=_ServiceStub(),
+                stdout=io.StringIO(),
+            )
+
+    def test_run_command_rejects_policy_seed_list_length_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "policy-seeds"):
+            run_cli(
+                [
+                    "run",
+                    "--anatomy",
+                    "Tree_00",
+                    "--execution-wire",
+                    "steve_default/standard_j",
+                    "--policy-name",
+                    "policy_a",
+                    "--target-mode",
+                    "branch_end",
+                    "--target-branches",
+                    "lcca",
+                    "--trial-count",
+                    "3",
+                    "--policy-mode",
+                    "stochastic",
+                    "--policy-seeds",
+                    "1000,1001",
+                ],
+                service=_ServiceStub(),
+                stdout=io.StringIO(),
+            )
+
+    def test_run_command_can_select_policy_by_agent_ref_when_names_collide(
+        self,
+    ) -> None:
         class _AmbiguousServiceStub(_ServiceStub):
             def __init__(self) -> None:
                 super().__init__()
@@ -342,14 +479,18 @@ class CliAdapterTests(unittest.TestCase):
                     checkpoint_path=Path("/tmp/shared_policy_registry.everl"),
                     trained_on_wire=self.execution_wire,
                     source="registry",
-                    registry_agent=AgentRef(wire=self.execution_wire, agent="registry_agent"),
+                    registry_agent=AgentRef(
+                        wire=self.execution_wire, agent="registry_agent"
+                    ),
                 )
                 self.same_name_explicit = PolicySpec(
                     name="shared_policy",
                     checkpoint_path=Path("/tmp/shared_policy_explicit.everl"),
                     trained_on_wire=self.execution_wire,
                     source="explicit",
-                    registry_agent=AgentRef(wire=self.execution_wire, agent="explicit_agent"),
+                    registry_agent=AgentRef(
+                        wire=self.execution_wire, agent="explicit_agent"
+                    ),
                 )
 
             def list_registry_policies(self, *, execution_wire=None):
@@ -390,7 +531,9 @@ class CliAdapterTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(len(service.jobs), 1)
-        self.assertEqual(service.jobs[0].candidates[0].policy, service.same_name_explicit)
+        self.assertEqual(
+            service.jobs[0].candidates[0].policy, service.same_name_explicit
+        )
         self.assertIn("summaries=1", stdout.getvalue())
 
     def test_run_command_builds_visualization_execution_settings(self) -> None:
@@ -424,6 +567,173 @@ class CliAdapterTests(unittest.TestCase):
             service.jobs[0].execution.visualization,
             VisualizationSpec(enabled=True, rendered_trials_per_candidate=2),
         )
+
+    def test_run_command_stores_worker_count(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--workers",
+                "4",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(service.jobs[0].execution.worker_count, 4)
+
+    def test_cli_passes_tip_length_to_force_and_scoring_config(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--tip-length-mm",
+                "7.5",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertAlmostEqual(
+            service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm, 7.5
+        )
+        self.assertAlmostEqual(service.jobs[0].scoring.force.tip_length_mm, 7.5)
+
+    def test_cli_uses_default_tip_length(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertAlmostEqual(
+            service.jobs[0].scenarios[0].force_telemetry.tip_threshold_mm,
+            DEFAULT_TIP_THRESHOLD_MM,
+        )
+        self.assertAlmostEqual(
+            service.jobs[0].scoring.force.tip_length_mm,
+            DEFAULT_TIP_THRESHOLD_MM,
+        )
+
+    def test_cli_no_write_trace_flag_sets_spec_to_false(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--no-write-trace",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertFalse(service.jobs[0].scenarios[0].force_telemetry.write_full_trace)
+
+    def test_cli_write_diagnostics_flag_sets_spec_to_true(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        rc = run_cli(
+            [
+                "run",
+                "--anatomy",
+                "Tree_00",
+                "--execution-wire",
+                "steve_default/standard_j",
+                "--policy-name",
+                "policy_a",
+                "--target-mode",
+                "branch_end",
+                "--target-branches",
+                "lcca",
+                "--write-diagnostics",
+            ],
+            service=service,
+            stdout=stdout,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(service.jobs[0].scenarios[0].force_telemetry.write_diagnostics)
+
+    def test_run_command_rejects_parallel_visualization(self) -> None:
+        service = _ServiceStub()
+        stdout = io.StringIO()
+
+        with self.assertRaises(ValueError):
+            run_cli(
+                [
+                    "run",
+                    "--anatomy",
+                    "Tree_00",
+                    "--execution-wire",
+                    "steve_default/standard_j",
+                    "--policy-name",
+                    "policy_a",
+                    "--target-mode",
+                    "branch_end",
+                    "--target-branches",
+                    "lcca",
+                    "--visualize",
+                    "--workers",
+                    "2",
+                ],
+                service=service,
+                stdout=stdout,
+            )
 
 
 if __name__ == "__main__":

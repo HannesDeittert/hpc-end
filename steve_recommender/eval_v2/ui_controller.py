@@ -18,6 +18,7 @@ from .models import (
     EvaluationReport,
     EvaluationScenario,
     HistoricalReportSummary,
+    ScoringSpec,
     TargetModeDescriptor,
     WireRef,
 )
@@ -60,8 +61,10 @@ class WizardState:
     selected_wires: list[WireRef] = field(default_factory=list)
     is_deterministic: bool = True
     trials_per_wire: int = 1
+    stochastic_environment_mode: str = "random_start"
     is_visualized: bool = False
     visualized_trials_count: int = 1
+    worker_count: int = 1
 
 
 class EvaluationWorker(QThread):
@@ -196,6 +199,30 @@ class EvaluationWorker(QThread):
                     _emit_progress(_compute_percent(completed_trials=trials_completed, trial_step=0))
                     return
 
+                if event == "parallel_start":
+                    workers = self._safe_int(payload.get("workers"), default=1)
+                    self.status_updated.emit(
+                        f"Running Headless Evaluation: {workers} workers..."
+                    )
+                    _emit_progress(0)
+                    return
+
+                if event == "parallel_trial_done":
+                    completed = self._safe_int(payload.get("completed"), default=trials_completed)
+                    total = self._safe_int(payload.get("total"), default=total_trials)
+                    trials_completed = max(0, min(completed, max(total, total_trials, 1)))
+                    self.status_updated.emit(
+                        f"Running Headless Evaluation: {trials_completed} of {max(total, total_trials)} trials"
+                    )
+                    denom = max(1, total, total_trials)
+                    _emit_progress(int(round(float(trials_completed) / float(denom) * 100.0)))
+                    return
+
+                if event == "parallel_end":
+                    trials_completed = max(total_trials, self._safe_int(payload.get("completed"), default=total_trials))
+                    _emit_progress(100)
+                    return
+
             def _frame_callback(frame: np.ndarray) -> None:
                 if not stream_frames:
                     return
@@ -257,36 +284,28 @@ class ClinicalUIController(QObject):
             "insertion_time": 0.5,
             "tip_force": 0.8,
         }
-        self._default_results_axis_weights: Dict[str, float] = {
-            "success": 0.6,
-            "speed": 0.25,
-            "safety": 0.15,
-        }
-        self._results_axis_weights: Dict[str, float] = dict(self._default_results_axis_weights)
-        self._evaluation_schema: Dict[str, Dict[str, Any]] = {
-            "Safety": {
-                "weight": 1.0,
-                "sub_metrics": {
-                    "Max Force": {"weight": 1.0, "axis": "safety"},
-                    "Friction": {"weight": 0.5, "axis": "safety"},
-                },
-            },
-            "Efficacy": {
-                "weight": 1.0,
-                "sub_metrics": {
-                    "Success Rate": {"weight": 1.0, "axis": "success"},
-                    "Speed": {"weight": 1.0, "axis": "speed"},
-                },
-            },
-        }
+        self._default_results_controls: Dict[str, float] = {}
+        self._results_controls: Dict[str, float] = {}
+        self._results_controls_schema: Dict[str, Dict[str, Any]] = {}
+        self.configure_results_scoring(ScoringSpec())
         self._wizard_state = WizardState()
 
     @property
     def active_worker(self) -> Optional[EvaluationWorker]:
         return self._active_worker
 
-    def get_anatomies(self, *, registry_path=None):
-        return self._service.list_anatomies(registry_path=registry_path)
+    def get_anatomies(
+        self,
+        *,
+        registry_path=None,
+        limit: Optional[int] = None,
+        random_sample: bool = False,
+    ):
+        return self._service.list_anatomies(
+            registry_path=registry_path,
+            limit=limit,
+            random_sample=random_sample,
+        )
 
     def get_execution_wires(self):
         return self._service.list_execution_wires()
@@ -317,8 +336,8 @@ class ClinicalUIController(QObject):
     def list_historical_reports(self) -> Tuple[HistoricalReportSummary, ...]:
         return self._service.list_historical_reports()
 
-    def load_report_from_disk(self, report_json_path: Path) -> EvaluationReport:
-        return self._service.load_report_from_disk(report_json_path)
+    def load_manifest_from_disk(self, manifest_json_path: Path) -> EvaluationReport:
+        return self._service.load_manifest_from_disk(manifest_json_path)
 
     def save_clinical_feedback(
         self,
@@ -354,21 +373,119 @@ class ClinicalUIController(QObject):
     def get_metric_weights(self) -> Dict[str, float]:
         return dict(self._metric_weights)
 
-    def get_default_results_axis_weights(self) -> Dict[str, float]:
-        return dict(self._default_results_axis_weights)
+    def configure_results_scoring(self, scoring_spec: Optional[ScoringSpec]) -> None:
+        scoring = scoring_spec or ScoringSpec()
+        default_weights = dict(scoring.candidate_score.default_weights)
+        self._default_results_controls = {
+            "score_weight_safety": float(default_weights.get("score_safety", 0.5)),
+            "score_weight_efficiency": float(default_weights.get("score_efficiency", 0.5)),
+            "score_lambda": float(scoring.candidate_score.lambda_),
+            "score_beta": float(scoring.candidate_score.beta),
+            "force_max_N": float(scoring.force.force_max_N),
+            "force_score_c": float(scoring.safety_score.c),
+            "force_score_p": float(scoring.safety_score.p),
+            "force_score_k": float(scoring.safety_score.k),
+            "force_score_F50_N": float(scoring.safety_score.F50_N),
+        }
+        self._results_controls = dict(self._default_results_controls)
+        self._results_controls_schema = {
+            "Candidate Score": {
+                "controls": {
+                    "Safety Weight": {
+                        "key": "score_weight_safety",
+                        "default": self._default_results_controls["score_weight_safety"],
+                        "min": 0.0,
+                        "max": 1.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Efficiency Weight": {
+                        "key": "score_weight_efficiency",
+                        "default": self._default_results_controls["score_weight_efficiency"],
+                        "min": 0.0,
+                        "max": 1.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Lambda": {
+                        "key": "score_lambda",
+                        "default": self._default_results_controls["score_lambda"],
+                        "min": 0.0,
+                        "max": 3.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Beta": {
+                        "key": "score_beta",
+                        "default": self._default_results_controls["score_beta"],
+                        "min": 0.0,
+                        "max": 2.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                },
+            },
+            "Safety Model": {
+                "controls": {
+                    "Force Max (N)": {
+                        "key": "force_max_N",
+                        "default": self._default_results_controls["force_max_N"],
+                        "min": 0.1,
+                        "max": 5.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score c": {
+                        "key": "force_score_c",
+                        "default": self._default_results_controls["force_score_c"],
+                        "min": 0.0,
+                        "max": 2.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score p": {
+                        "key": "force_score_p",
+                        "default": self._default_results_controls["force_score_p"],
+                        "min": 0.1,
+                        "max": 5.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score k": {
+                        "key": "force_score_k",
+                        "default": self._default_results_controls["force_score_k"],
+                        "min": 0.1,
+                        "max": 20.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                    "Force Score F50 (N)": {
+                        "key": "force_score_F50_N",
+                        "default": self._default_results_controls["force_score_F50_N"],
+                        "min": 0.1,
+                        "max": 5.0,
+                        "resolution": 100,
+                        "format": "{value:.2f}",
+                    },
+                },
+            },
+        }
 
-    def set_results_axis_weight(self, axis_name: str, value: float) -> None:
-        self._results_axis_weights[str(axis_name)] = max(float(value), 0.0)
+    def get_default_results_controls(self) -> Dict[str, float]:
+        return dict(self._default_results_controls)
 
-    def get_results_axis_weights(self) -> Dict[str, float]:
-        return dict(self._results_axis_weights)
+    def set_results_control_value(self, control_name: str, value: float) -> None:
+        self._results_controls[str(control_name)] = float(value)
 
-    def reset_results_axis_weights(self) -> Dict[str, float]:
-        self._results_axis_weights = dict(self._default_results_axis_weights)
-        return self.get_results_axis_weights()
+    def get_results_control_values(self) -> Dict[str, float]:
+        return dict(self._results_controls)
 
-    def get_evaluation_schema(self) -> Dict[str, Dict[str, Any]]:
-        return deepcopy(self._evaluation_schema)
+    def reset_results_control_values(self) -> Dict[str, float]:
+        self._results_controls = dict(self._default_results_controls)
+        return self.get_results_control_values()
+
+    def get_results_control_schema(self) -> Dict[str, Dict[str, Any]]:
+        return deepcopy(self._results_controls_schema)
 
     def reset_wizard_state(self) -> None:
         self._wizard_state = WizardState()
@@ -393,13 +510,17 @@ class ClinicalUIController(QObject):
         *,
         is_deterministic: bool,
         trials_per_wire: int,
+        stochastic_environment_mode: str,
         is_visualized: bool,
         visualized_trials_count: int,
+        worker_count: int,
     ) -> None:
         self._wizard_state.is_deterministic = bool(is_deterministic)
         self._wizard_state.trials_per_wire = max(int(trials_per_wire), 1)
+        self._wizard_state.stochastic_environment_mode = str(stochastic_environment_mode)
         self._wizard_state.is_visualized = bool(is_visualized)
         self._wizard_state.visualized_trials_count = max(int(visualized_trials_count), 1)
+        self._wizard_state.worker_count = max(int(worker_count), 1)
 
     def can_forward_from_step(self, step_index: int) -> bool:
         state = self._wizard_state
@@ -412,9 +533,9 @@ class ClinicalUIController(QObject):
         if step_index == 3:
             return len(state.selected_wires) >= 1
         if step_index == 4:
-            if state.is_deterministic:
-                return True
             if state.trials_per_wire < 1:
+                return False
+            if state.stochastic_environment_mode not in {"fixed_start", "random_start"}:
                 return False
             if state.is_visualized and state.visualized_trials_count > state.trials_per_wire:
                 return False

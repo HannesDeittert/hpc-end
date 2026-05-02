@@ -8,6 +8,55 @@ from steve_recommender.evaluation.info_collectors import SofaWallForceInfo
 
 
 class WallForceMappingTests(unittest.TestCase):
+    def test_resolve_constraint_dt_prefers_simulation_root_dt(self) -> None:
+        info = SofaWallForceInfo(
+            object(),
+            mode="constraint_projected_si_validated",
+            constraint_dt_s=0.2,
+        )
+
+        class _Data:
+            def __init__(self, value):
+                self.value = value
+
+        class _Root:
+            dt = _Data(0.006)
+
+        class _Sim:
+            root = _Root()
+
+        dt = info._resolve_constraint_dt_s(_Sim())
+        self.assertIsNotNone(dt)
+        self.assertAlmostEqual(float(dt), 0.006, places=9)
+
+    def test_extract_tip_force_from_samples_uses_nearest_active_sample(self) -> None:
+        vec, norm, idx, source = SofaWallForceInfo._extract_tip_force_from_samples(
+            tip_pos=np.asarray([0.0, 0.0, 0.0], dtype=np.float32),
+            candidate_forces=np.asarray(
+                [[0.0, 0.0, 0.0], [0.0, 2.0, 0.0]], dtype=np.float32
+            ),
+            candidate_positions=np.asarray(
+                [[5.0, 0.0, 0.0], [0.05, 0.0, 0.0]], dtype=np.float32
+            ),
+            contact_epsilon=1e-7,
+        )
+        self.assertTrue(np.allclose(vec, np.asarray([0.0, 2.0, 0.0], dtype=np.float32)))
+        self.assertAlmostEqual(norm, 2.0, places=6)
+        self.assertEqual(idx, 1)
+        self.assertEqual(source, "nearest_tip_sample")
+
+    def test_extract_tip_force_reports_below_epsilon(self) -> None:
+        vec, norm, idx, source = SofaWallForceInfo._extract_tip_force_from_samples(
+            tip_pos=np.asarray([1.0, 0.0, 0.0], dtype=np.float32),
+            candidate_forces=np.asarray([[1e-9, 0.0, 0.0]], dtype=np.float32),
+            candidate_positions=np.asarray([[1.0, 0.0, 0.0]], dtype=np.float32),
+            contact_epsilon=1e-7,
+        )
+        self.assertTrue(np.allclose(vec, np.zeros((3,), dtype=np.float32)))
+        self.assertAlmostEqual(norm, 0.0, places=9)
+        self.assertEqual(idx, 0)
+        self.assertEqual(source, "nearest_tip_sample_below_epsilon")
+
     def test_maps_contact_points_to_nearest_wall_triangles(self) -> None:
         wall_centroids = np.asarray(
             [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], dtype=np.float32

@@ -1,0 +1,8 @@
+{
+  "checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/agents/archvar_universalii_strong_hook_best/checkpoints/best_checkpoint.everl",
+  "name": "archvar_universalii_strong_hook_best",
+  "run_dir": "/home/hannes-deittert/dev/Uni/master-project/data/wire_registry/universal_ii/wire_versions/strong_hook/agents/archvar_universalii_strong_hook_best/checkpoints",
+  "source_checkpoint": "/home/hannes-deittert/dev/Uni/master-project/data/archive/agents/complete/complete_universalii_stronghook/2026-04-25_135912_a100x1_archvar_universalii_stronghook_cap150_450_full_1583387/checkpoints/best_checkpoint.everl",
+  "source_agent_json": null,
+  "tool": "universal_ii/strong_hook"
+}
