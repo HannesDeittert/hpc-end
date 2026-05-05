@@ -200,7 +200,7 @@ def _build_case_intervention(
     )
 
     device = make_device(tool_ref)
-    simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(friction=0.001)
+    simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(friction=0.1)
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
         vessel_tree=vessel_tree,

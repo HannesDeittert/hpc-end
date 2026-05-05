@@ -35,7 +35,7 @@ class AorticArchSpec:
     # Simulator/fluoro parameters (kept explicit so evaluation is reproducible).
     image_frequency_hz: float = 7.5
     image_rot_zx_deg: Sequence[float] = (20.0, 5.0)
-    friction: float = 0.001
+    friction: float = 0.1
 
 
 AnatomySpec = AorticArchSpec

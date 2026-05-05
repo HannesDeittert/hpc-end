@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -7,31 +8,37 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parents[1]
+PROJECT_ROOT = SCRIPT_DIR.parents[0]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-HELPER_DIR = SCRIPT_DIR / "notebook_helpers"
+HELPER_DIR = SCRIPT_DIR.parent / "experiments" / "master-thesis" / "notebook_helpers"
 if str(HELPER_DIR) not in sys.path:
     sys.path.insert(0, str(HELPER_DIR))
 
-from e1 import (  # noqa: E402
-    DEFAULT_E1_LOGS_ROOT,
-    DEFAULT_E1_METADATA_ROOT,
+from e1_tinyfat import (  # noqa: E402
     DEFAULT_E1_ROOT,
     DEFAULT_SAMPLE_JSON,
     DEFAULT_TARGET_BRANCHES,
-    build_sbatch_script,
     build_job_manifest,
-    build_execution_plan,
     derive_partition_weights_from_probe,
     load_sample_anatomies,
     parse_partition_weights,
     probe_cluster_partitions,
-    write_targets_json,
+    target_equivalence_report,
     write_partition_bucket_manifests,
+    write_targets_json,
     write_wires_json,
+    build_sbatch_script,
 )
+
+
+def make_default_service():
+    try:
+        from steve_recommender.eval_v2.service import DefaultEvaluationService
+    except Exception:
+        return None
+    return DefaultEvaluationService()
 
 
 def _wire_to_dict(wire: object) -> dict[str, str]:
@@ -46,16 +53,8 @@ def _wire_to_dict(wire: object) -> dict[str, str]:
     return {"model": model, "wire": wire_name, "tool_ref": tool_ref}
 
 
-def make_default_service():
-    try:
-        from steve_recommender.eval_v2.service import DefaultEvaluationService
-    except Exception:
-        return None
-    return DefaultEvaluationService()
-
-
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate E1 job manifests and Slurm scripts")
+    parser = argparse.ArgumentParser(description="Generate TinyFat E1 job manifests and Slurm scripts")
     parser.add_argument("--sample-json", type=Path, default=DEFAULT_SAMPLE_JSON)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_E1_ROOT)
     parser.add_argument("--scripts-root", type=Path, default=PROJECT_ROOT / "scripts")
@@ -65,7 +64,8 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--target-branches", default=",".join(DEFAULT_TARGET_BRANCHES))
     parser.add_argument("--partitions", default=None)
     parser.add_argument("--walltime", default="24:00:00")
-    parser.add_argument("--worker-count", type=int, default=29)
+    parser.add_argument("--worker-count", type=int, default=None)
+    parser.add_argument("--friction", type=float, default=0.1)
     parser.add_argument("--max-episode-steps", type=int, default=1000)
     parser.add_argument("--trial-count", type=int, default=None)
     parser.add_argument("--config-id", type=int, default=None, help="Optional single config to materialize")
@@ -116,7 +116,6 @@ def _materialize_scripts(
     jobs_by_partition: dict[str, list[dict[str, object]]],
     scripts_root: Path,
     walltime: str,
-    worker_count: int,
 ) -> dict[str, Path]:
     script_paths: dict[str, Path] = {}
     metadata_root = output_root / "metadata"
@@ -127,21 +126,13 @@ def _materialize_scripts(
         bucket_manifest = metadata_root / f"job_manifest_{partition}.json"
         if not bucket_manifest.exists():
             continue
-        first_row = rows[0]
-        profile = {
-            "partition": partition,
-            "gres": str(first_row["gres"]),
-            "cpus_per_task": int(first_row["cpus_per_task"]),
-        }
-        script_path = scripts_root / f"e1_{partition}.sbatch"
+        script_path = scripts_root / f"e1_tinyfat_{partition}.sbatch"
         script_text = build_sbatch_script(
             project_root=project_root,
             partition=partition,
             jobs_manifest_path=bucket_manifest,
             logs_root=logs_root,
             walltime=walltime,
-            gres=profile["gres"],
-            cpus_per_task=profile["cpus_per_task"],
         )
         script_path.write_text(script_text, encoding="utf-8")
         script_path.chmod(0o755)
@@ -160,7 +151,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     scripts_root = Path(args.scripts_root).resolve()
 
     target_branches = tuple(str(item).strip() for item in args.target_branches.split(",") if item.strip())
-    partition_weights = parse_partition_weights(args.partitions)
+    partition_weights = (("work", 1.0),)
+    if args.partitions:
+        partition_weights = parse_partition_weights(args.partitions)
     targets_json = metadata_root / "targets.json"
     targets_payload = write_targets_json(
         sample_json=args.sample_json,
@@ -174,13 +167,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     write_wires_json(output_path=metadata_root / "wires.json", wires=wires)
 
     probe_rows = ()
-    if partition_weights or args.probe_cluster:
+    if args.probe_cluster:
         try:
             probe_rows = probe_cluster_partitions()
         except Exception:
             probe_rows = ()
-    if args.partitions is None and args.probe_cluster:
-        partition_weights = derive_partition_weights_from_probe(probe_rows)
+    if args.partitions is None:
+        partition_weights = (("work", 1.0),)
 
     manifest = build_job_manifest(
         sample_json=args.sample_json,
@@ -195,6 +188,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         probe_rows=probe_rows,
         worker_count=args.worker_count,
         walltime=args.walltime,
+        friction=float(args.friction),
         write_full_trace=bool(args.write_full_trace),
         write_diagnostics=bool(args.write_diagnostics),
     )
@@ -228,7 +222,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             },
             indent=2,
             sort_keys=True,
-        ) + "\n",
+        )
+        + "\n",
+        encoding="utf-8",
     )
     (metadata_root / "experiment_config.json").write_text(
         json.dumps(
@@ -244,6 +240,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "max_episode_steps": args.max_episode_steps,
                 "default_walltime": args.walltime,
                 "default_worker_count": args.worker_count,
+                "default_friction": float(args.friction),
                 "probe_rows": [
                     {
                         "partition": row.partition,
@@ -276,18 +273,42 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         jobs_by_partition=jobs_by_partition,
         scripts_root=scripts_root,
         walltime=args.walltime,
-        worker_count=args.worker_count,
     )
 
-    print(f"[E1] output_root={output_root}")
-    print(f"[E1] metadata_root={metadata_root}")
-    print(f"[E1] n_jobs={len(manifest['jobs'])}")
-    print(f"[E1] partitions={sorted(jobs_by_partition)}")
-    print(f"[E1] bucket_manifests={ {k: str(v) for k, v in bucket_manifests.items()} }")
-    print(f"[E1] script_paths={ {k: str(v) for k, v in script_paths.items()} }")
-    print(f"[E1] wires={len(wires)}")
-    print(f"[E1] targets={len(targets_payload['selected_anatomies'])}")
-    return 0
+    print(f"[E1-TF] output_root={output_root}")
+    print(f"[E1-TF] metadata_root={metadata_root}")
+    print(f"[E1-TF] n_jobs={len(manifest['jobs'])}")
+    print(f"[E1-TF] partitions={sorted(bucket_manifests)}")
+    print(f"[E1-TF] bucket_manifests={ {k: str(v) for k, v in bucket_manifests.items()} }")
+    print(f"[E1-TF] script_paths={ {k: str(v) for k, v in script_paths.items()} }")
+    print(f"[E1-TF] wires={len(wires)}")
+    print(f"[E1-TF] targets={len(targets_payload.get('selected_anatomies', []))}")
+    report = target_equivalence_report(manifest)
+    print(
+        json.dumps(
+            {
+                "missing_scripts": [str(path) for path in script_paths.values() if not path.exists()],
+                "n_jobs": len(manifest["jobs"]),
+                "n_scripts": len(script_paths),
+                "output_root": str(output_root),
+                "partition_weights": list(partition_weights),
+                "probe_rows": [
+                    {
+                        "partition": row.partition,
+                        "nodes_total": row.nodes_total,
+                        "states": row.states,
+                        "gres": list(row.gres),
+                        "cpus_per_node": row.cpus_per_node,
+                    }
+                    for row in probe_rows
+                ],
+                "target_report": report,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0 if report["same_targets_across_configs"] else 1
 
 
 if __name__ == "__main__":

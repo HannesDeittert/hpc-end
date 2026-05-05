@@ -272,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="When stochastic mode uses multiple trials, keep environment fixed or vary it across trials",
     )
 
-    run_parser.add_argument("--friction", type=float, default=0.001)
+    run_parser.add_argument("--friction", type=float, default=0.1)
     run_parser.add_argument(
         "--tip-length-mm",
         type=float,

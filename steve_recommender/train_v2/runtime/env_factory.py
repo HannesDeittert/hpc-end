@@ -98,7 +98,7 @@ class TrainV2Env(Env):
             self._step_trace.reset(episode_nr=int(self.episode_number))
         result = super().reset(seed=seed, options=options)
         if self._force_telemetry is not None:
-            status = self._force_telemetry.ensure_runtime(
+            status = self._force_telemetry.reset_episode(
                 intervention=self.intervention
             )
             if not status.configured:

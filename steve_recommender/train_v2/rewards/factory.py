@@ -58,6 +58,8 @@ def build_reward(
                     alpha=reward_spec.force_alpha,
                     beta=reward_spec.force_beta,
                     force_region=reward_spec.force_region,
+                    penalty_mode=reward_spec.force_penalty_mode,
+                    threshold_N=reward_spec.force_threshold_N,
                 ),
             )
         )

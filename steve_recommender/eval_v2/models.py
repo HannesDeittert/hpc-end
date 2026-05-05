@@ -663,7 +663,7 @@ class EvaluationScenario:
     anatomy: AorticArchAnatomy
     target: TargetSpec
     fluoroscopy: FluoroscopySpec = field(default_factory=FluoroscopySpec)
-    friction: float = 0.001
+    friction: float = 0.1
     stop_device_at_tree_end: bool = True
     normalize_action: bool = True
     force_telemetry: ForceTelemetrySpec = field(default_factory=ForceTelemetrySpec)

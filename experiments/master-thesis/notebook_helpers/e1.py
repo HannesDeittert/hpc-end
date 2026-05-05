@@ -346,6 +346,8 @@ def build_job_manifest(
     probe_rows: Sequence[PartitionProbeRow] = (),
     worker_count: int = DEFAULT_WORKER_COUNT,
     walltime: str = DEFAULT_WALLTIME,
+    write_full_trace: bool = True,
+    write_diagnostics: bool = False,
 ) -> dict[str, Any]:
     sample_json = Path(sample_json).resolve()
     targets_json = Path(targets_json).resolve()
@@ -374,6 +376,8 @@ def build_job_manifest(
                             **config_spec(config_id),
                             "max_episode_steps": int(max_episode_steps),
                         },
+                        "write_full_trace": bool(write_full_trace),
+                        "write_diagnostics": bool(write_diagnostics),
                         "anatomy_id": anatomy_id,
                         "anatomy_index": anatomy_index,
                         "target_index": target_index,
@@ -415,6 +419,8 @@ def build_job_manifest(
         "partition_weights": list(partition_weights if partition_weights is not None else parse_partition_weights(partitions)),
         "worker_count": int(worker_count),
         "walltime": str(walltime),
+        "write_full_trace": bool(write_full_trace),
+        "write_diagnostics": bool(write_diagnostics),
         "max_episode_steps": int(max_episode_steps),
         "jobs": job_rows,
     }

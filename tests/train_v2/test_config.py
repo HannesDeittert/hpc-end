@@ -35,6 +35,32 @@ def test_normal_force_reward_profile_requires_non_negative_beta():
         )
 
 
+def test_reward_spec_default_force_mode_matches_eval_v2_default():
+    cfg = RewardSpec(profile="default_plus_normal_force_penalty")
+
+    assert cfg.force_telemetry_mode == "passive"
+
+
+def test_reward_spec_accepts_relu_force_penalty_mode():
+    cfg = RewardSpec(
+        profile="default_plus_normal_force_penalty",
+        force_penalty_mode="relu_threshold",
+        force_threshold_N=0.8,
+    )
+
+    assert cfg.force_penalty_mode == "relu_threshold"
+    assert cfg.force_threshold_N == pytest.approx(0.8)
+
+
+def test_reward_spec_rejects_negative_force_threshold():
+    with pytest.raises(ValueError, match="force_threshold_N"):
+        RewardSpec(
+            profile="default_plus_normal_force_penalty",
+            force_penalty_mode="relu_threshold",
+            force_threshold_N=-0.1,
+        )
+
+
 def test_build_doctor_config_converts_paths():
     cfg = build_doctor_config(
         tool_ref="steve_default/standard_j",

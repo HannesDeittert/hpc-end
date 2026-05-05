@@ -29,7 +29,7 @@ def build_env(device_name: str, seed: int = 0) -> eve.Env:
     device = make_device(device_name)
 
     simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
-        friction=0.001
+        friction=0.1
     )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,

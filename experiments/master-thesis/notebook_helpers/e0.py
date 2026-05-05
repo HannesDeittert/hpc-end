@@ -113,7 +113,9 @@ SAMPLE_JSON="$CHUNK_FILE" OUTPUT_ROOT="$OUTPUT_ROOT" RUNS_PER_ANATOMY="$RUNS_PER
 
 def _resolve_path(base: Path, value: Any) -> Path:
     path = Path(str(value))
-    return path if path.is_absolute() else (base / path).resolve()
+    if path.is_absolute():
+        return path
+    return (PROJECT_ROOT / path).resolve()
 
 
 def _decode_h5_column(array: Any) -> list[Any]:
@@ -217,18 +219,58 @@ def load_trials_h5(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def load_trace_step_metrics(path: Path) -> dict[str, float | None]:
+    import h5py
+    import numpy as np
+
+    path = Path(path)
+    if not path.exists():
+        return {
+            'step_total_wall_force_mean_N': None,
+            'step_total_wall_force_max_N': None,
+        }
+
+    with h5py.File(path, 'r') as handle:
+        steps_group = handle.get('steps')
+        if steps_group is None or 'total_wall_force_N' not in steps_group:
+            return {
+                'step_total_wall_force_mean_N': None,
+                'step_total_wall_force_max_N': None,
+            }
+        values = np.asarray(steps_group['total_wall_force_N'][...], dtype=float)
+        values = values[~np.isnan(values)]
+        if values.size == 0:
+            return {
+                'step_total_wall_force_mean_N': None,
+                'step_total_wall_force_max_N': None,
+            }
+        return {
+            'step_total_wall_force_mean_N': float(np.mean(values)),
+            'step_total_wall_force_max_N': float(np.max(values)),
+        }
+
+
 def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
     with Path(path).open('r', encoding='utf-8', newline='') as handle:
         return list(csv.DictReader(handle))
 
 
-def load_e0_results(result_root: Path):
+def load_e0_results(result_root: Path, *, chunk_dir: str | None = None):
     result_root = Path(result_root).resolve()
     manifest_paths = sorted(result_root.rglob('manifest.json'))
     if not manifest_paths:
         raise FileNotFoundError(
             f'No manifest.json files found under {result_root}. Sync the chunk results there or set E0_RESULTS_ROOT.'
         )
+    if chunk_dir is not None:
+        chunk_dir = str(chunk_dir)
+        manifest_paths = [
+            path for path in manifest_paths if path.parent.parent.name == chunk_dir or path.parent.name == chunk_dir
+        ]
+        if not manifest_paths:
+            raise FileNotFoundError(
+                f'No manifest.json files found for chunk {chunk_dir!r} under {result_root}.'
+            )
 
     manifest_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
@@ -264,6 +306,11 @@ def load_e0_results(result_root: Path):
 
         if trials_h5.exists():
             for row in load_trials_h5(trials_h5):
+                trace_h5_path = row.get('trace_h5_path')
+                if trace_h5_path:
+                    trace_path = _resolve_path(run_dir, trace_h5_path)
+                    if trace_path.exists():
+                        row.update(load_trace_step_metrics(trace_path))
                 row.update(run_meta)
                 row['source_file'] = str(trials_h5)
                 trial_rows.append(row)
@@ -272,19 +319,19 @@ def load_e0_results(result_root: Path):
 
 
 def _safe_mean(values: Iterable[float]) -> float | None:
-    values = [float(v) for v in values if v is not None]
+    values = [float(v) for v in values if v is not None and not (isinstance(v, float) and math.isnan(v))]
     return statistics.mean(values) if values else None
 
 
 def _safe_std(values: Iterable[float]) -> float | None:
-    values = [float(v) for v in values if v is not None]
+    values = [float(v) for v in values if v is not None and not (isinstance(v, float) and math.isnan(v))]
     return statistics.pstdev(values) if len(values) > 1 else None
 
 
 def _safe_percentile(values: Iterable[float], q: float) -> float | None:
     import numpy as np
 
-    values = [float(v) for v in values if v is not None]
+    values = [float(v) for v in values if v is not None and not (isinstance(v, float) and math.isnan(v))]
     if not values:
         return None
     return float(np.percentile(np.asarray(values, dtype=float), q * 100.0))
@@ -328,17 +375,25 @@ def analyze_e0_results(
     candidate_rows: list[dict[str, Any]] = []
     for wire, rows in groups.items():
         score_values = [row.get('score_total') for row in rows]
+        safety_values = [row.get('score_safety') for row in rows]
         success_values = [row.get('success') for row in rows]
         steps_total_values = [row.get('steps_total') for row in rows]
         steps_to_success_values = [row.get('steps_to_success') for row in rows if row.get('success') and row.get('steps_to_success') is not None]
+        wire_force_normal_trial_max_values = [row.get('wire_force_normal_trial_max_N') for row in rows]
+        step_total_wall_force_mean_values = [row.get('step_total_wall_force_mean_N') for row in rows]
+        step_total_wall_force_max_values = [row.get('step_total_wall_force_max_N') for row in rows]
 
         success_rate = _safe_mean([1.0 if bool(v) else 0.0 for v in success_values])
         score_mean = _safe_mean(score_values)
         score_std = _safe_std(score_values)
+        score_safety_mean = _safe_mean(safety_values)
         steps_total_mean = _safe_mean(steps_total_values)
         steps_total_p95 = _safe_percentile(steps_total_values, 0.95)
         steps_to_success_mean = _safe_mean(steps_to_success_values)
         steps_to_success_p95 = _safe_percentile(steps_to_success_values, 0.95)
+        wire_force_normal_trial_max_mean = _safe_mean(wire_force_normal_trial_max_values)
+        step_total_wall_force_mean = _safe_mean(step_total_wall_force_mean_values)
+        step_total_wall_force_max_mean = _safe_mean(step_total_wall_force_max_values)
 
         candidate_rows.append(
             {
@@ -347,10 +402,14 @@ def analyze_e0_results(
                 'success_rate': success_rate,
                 'score_mean': score_mean,
                 'score_std': score_std,
+                'score_safety_mean': score_safety_mean,
                 'steps_total_mean': steps_total_mean,
                 'steps_total_p95': steps_total_p95,
                 'steps_to_success_mean': steps_to_success_mean,
                 'steps_to_success_p95': steps_to_success_p95,
+                'wire_force_normal_trial_max_mean_N': wire_force_normal_trial_max_mean,
+                'step_total_wall_force_mean_N': step_total_wall_force_mean,
+                'step_total_wall_force_max_mean_N': step_total_wall_force_max_mean,
             }
         )
 
@@ -379,7 +438,7 @@ def analyze_e0_results(
         recommended_cutoff = None
 
     _write_rows_csv(analysis_root / 'e0_candidate_aggregate.csv', candidate_rows, [
-        'execution_wire', 'n_trials', 'success_rate', 'score_mean', 'score_std', 'steps_total_mean', 'steps_total_p95', 'steps_to_success_mean', 'steps_to_success_p95',
+        'execution_wire', 'n_trials', 'success_rate', 'score_mean', 'score_std', 'score_safety_mean', 'steps_total_mean', 'steps_total_p95', 'steps_to_success_mean', 'steps_to_success_p95', 'wire_force_normal_trial_max_mean_N', 'step_total_wall_force_mean_N', 'step_total_wall_force_max_mean_N',
     ])
     _write_rows_csv(analysis_root / 'e0_trials_flat.csv', trial_rows, sorted({key for row in trial_rows for key in row.keys()}))
 
@@ -456,6 +515,24 @@ def analyze_e0_results(
         ax.legend(loc='lower right')
         fig.savefig(analysis_root / 'e0_episode_length_ecdf.png', dpi=200, bbox_inches='tight')
         fig.savefig(analysis_root / 'e0_episode_length_ecdf.pdf', bbox_inches='tight')
+        plt.close(fig)
+
+        hist_max = min(1000, step_axis_max)
+        hist_bins = np.arange(0.5, hist_max + 1.5, 1.0)
+        fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
+        ax.hist(
+            successful_steps,
+            bins=hist_bins,
+            color='#7c3aed',
+            edgecolor='white',
+            linewidth=0.5,
+        )
+        ax.set_xlim(1, hist_max)
+        ax.set_xlabel('steps to success')
+        ax.set_ylabel('number of successful runs')
+        ax.set_title('Distribution of steps-to-success over successful trials')
+        fig.savefig(analysis_root / 'e0_success_steps_hist.png', dpi=200, bbox_inches='tight')
+        fig.savefig(analysis_root / 'e0_success_steps_hist.pdf', bbox_inches='tight')
         plt.close(fig)
 
     return {

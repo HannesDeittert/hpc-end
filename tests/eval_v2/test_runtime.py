@@ -133,7 +133,7 @@ class RuntimeAssemblyIntegrationTests(unittest.TestCase):
                 omit_axis="z",
             ),
             target=BranchEndTarget(threshold_mm=5.0, branches=("lcca",)),
-            friction=0.001,
+            friction=0.1,
         )
 
         runtime = prepare_evaluation_runtime(

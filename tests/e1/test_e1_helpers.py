@@ -73,6 +73,24 @@ class E1HelperTests(unittest.TestCase):
             self.assertEqual(manifest["max_episode_steps"], 777)
             self.assertEqual(manifest["jobs"][0]["config_spec"]["max_episode_steps"], 777)
 
+    def test_build_job_manifest_records_trace_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            sample_json = self._sample_json(tmp)
+            targets_json = tmp / "targets.json"
+            write_targets_json(sample_json=sample_json, output_path=targets_json)
+            manifest = build_job_manifest(
+                sample_json=sample_json,
+                targets_json=targets_json,
+                output_root=tmp / "e1",
+                write_full_trace=False,
+                write_diagnostics=True,
+            )
+            self.assertFalse(manifest["write_full_trace"])
+            self.assertTrue(manifest["write_diagnostics"])
+            self.assertFalse(manifest["jobs"][0]["write_full_trace"])
+            self.assertTrue(manifest["jobs"][0]["write_diagnostics"])
+
     def test_target_equivalence_report_detects_same_targets_across_configs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

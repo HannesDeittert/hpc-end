@@ -244,7 +244,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--policy-device", default="cpu")
     parser.add_argument("--max-episode-steps", type=int, default=1000)
     parser.add_argument("--threshold-mm", type=float, default=5.0)
-    parser.add_argument("--friction", type=float, default=0.001)
+    parser.add_argument("--friction", type=float, default=0.1)
     parser.add_argument("--tip-length-mm", type=float, default=3.0)
     parser.add_argument("--image-frequency-hz", type=float, default=7.5)
     parser.add_argument("--image-rot-z-deg", type=float, default=20.0)

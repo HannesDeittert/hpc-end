@@ -55,6 +55,27 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--worker-count", type=int, default=DEFAULT_WORKER_COUNT)
     parser.add_argument("--policy-device", default="cpu")
     parser.add_argument("--threshold-mm", type=float, default=5.0)
+    parser.add_argument(
+        "--no-write-trace",
+        action="store_false",
+        dest="write_full_trace",
+        default=None,
+        help="Disable per-trial trace HDF5 files for this run.",
+    )
+    parser.add_argument(
+        "--write-trace",
+        action="store_true",
+        dest="write_full_trace",
+        default=None,
+        help="Enable per-trial trace HDF5 files for this run.",
+    )
+    parser.add_argument(
+        "--write-diagnostics",
+        action="store_true",
+        dest="write_diagnostics",
+        default=None,
+        help="Write optional diagnostic datasets into trace HDF5 files.",
+    )
     return parser.parse_args(argv)
 
 
@@ -116,6 +137,8 @@ def _build_scenario(
     anatomy_id: str,
     target_spec: dict[str, Any],
     service: Any,
+    write_full_trace: bool,
+    write_diagnostics: bool,
 ) -> EvaluationScenario:
     anatomy = service.get_anatomy(record_id=anatomy_id)
     target = CenterlineRandomTarget(
@@ -132,8 +155,8 @@ def _build_scenario(
             mode="passive",
             required=False,
             tip_threshold_mm=float(target_spec.get("threshold_mm", 5.0)),
-            write_full_trace=True,
-            write_diagnostics=False,
+            write_full_trace=bool(write_full_trace),
+            write_diagnostics=bool(write_diagnostics),
             plugin_path=None,
             units=None,
         ),
@@ -175,9 +198,17 @@ def _job_from_inputs(
     threshold_mm: float,
     wires_json: Path,
     service: Any,
+    write_full_trace: bool,
+    write_diagnostics: bool,
 ) -> EvaluationJob:
     _ = policy_device, threshold_mm
-    scenario = _build_scenario(anatomy_id=anatomy_id, target_spec=target_spec, service=service)
+    scenario = _build_scenario(
+        anatomy_id=anatomy_id,
+        target_spec=target_spec,
+        service=service,
+        write_full_trace=write_full_trace,
+        write_diagnostics=write_diagnostics,
+    )
     wires = _load_wires(wires_json, service)
     candidates = tuple(_build_candidate(service=service, execution_wire=wire) for wire in wires)
     execution = _build_execution_plan(
@@ -213,6 +244,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         seed_base = int(row["seed_base"]) if args.seed_base is None else int(args.seed_base)
         output_path = Path(str(row["output_dir"])) if args.output_path is None else Path(args.output_path)
         step_budget = int(args.step_budget) if args.step_budget is not None else int(row["config_spec"].get("max_episode_steps", 1000))
+        write_full_trace = bool(
+            row.get("write_full_trace", True)
+            if args.write_full_trace is None
+            else args.write_full_trace
+        )
+        write_diagnostics = bool(
+            row.get("write_diagnostics", False)
+            if args.write_diagnostics is None
+            else args.write_diagnostics
+        )
     else:
         if args.anatomy_id is None or args.target_spec is None or args.config_id is None or args.output_path is None or args.seed_base is None or args.step_budget is None:
             raise ValueError(
@@ -226,6 +267,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         seed_base = int(args.seed_base)
         output_path = Path(args.output_path)
         step_budget = int(args.step_budget)
+        write_full_trace = True if args.write_full_trace is None else bool(args.write_full_trace)
+        write_diagnostics = False if args.write_diagnostics is None else bool(args.write_diagnostics)
 
     job = _job_from_inputs(
         anatomy_id=anatomy_id,
@@ -240,6 +283,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         threshold_mm=float(args.threshold_mm),
         wires_json=Path(args.wires_json),
         service=service,
+        write_full_trace=write_full_trace,
+        write_diagnostics=write_diagnostics,
     )
 
     report = service.run_evaluation_job(

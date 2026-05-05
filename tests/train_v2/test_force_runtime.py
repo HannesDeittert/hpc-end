@@ -47,6 +47,31 @@ def test_force_runtime_retries_runtime_setup_during_sampling():
     assert sample.wire_force_normal_trial_max_N == 0.8
 
 
+def test_force_runtime_default_matches_eval_v2_passive_force_mode():
+    runtime = ForceRuntime(
+        reward_spec=RewardSpec(profile="default_plus_normal_force_penalty"),
+        action_dt_s=1.0 / 7.5,
+    )
+
+    assert runtime._collector._spec.mode == "passive"
+    assert runtime._collector._spec.units is None
+    assert runtime._collector._force_scale_to_newton == 1.0
+
+
+def test_force_runtime_explicit_si_mode_keeps_unit_conversion_available():
+    runtime = ForceRuntime(
+        reward_spec=RewardSpec(
+            profile="default_plus_normal_force_penalty",
+            force_telemetry_mode="constraint_projected_si_validated",
+        ),
+        action_dt_s=1.0 / 7.5,
+    )
+
+    assert runtime._collector._spec.mode == "constraint_projected_si_validated"
+    assert runtime._collector._spec.units is not None
+    assert runtime._collector._force_scale_to_newton == pytest.approx(0.001)
+
+
 def test_force_runtime_raises_when_runtime_stays_unavailable_during_live_step():
     runtime = ForceRuntime(
         reward_spec=RewardSpec(profile="default_plus_normal_force_penalty"),

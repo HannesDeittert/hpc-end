@@ -24,6 +24,7 @@ from .config import (
     DEFAULT_REWARD_PROFILE,
     DEFAULT_REPLAY_BUFFER_SIZE,
     DEFAULT_REWARD_SCALING,
+    DEFAULT_FORCE_THRESHOLD_N,
     DEFAULT_TRAINING_STEPS,
     DEFAULT_UPDATE_PER_EXPLORE_STEP,
     DoctorConfig,
@@ -60,6 +61,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_parser.add_argument("--force-alpha", type=float, default=0.1)
     train_parser.add_argument("--force-beta", type=float, default=1.0)
+    train_parser.add_argument(
+        "--force-penalty-mode",
+        choices=("linear_terminal_log", "relu_threshold"),
+        default="linear_terminal_log",
+        help=(
+            "Force penalty shape. linear_terminal_log uses the existing "
+            "-alpha*F_instant plus -beta*log1p(F_trial_max). relu_threshold "
+            "uses -alpha*max(0, F_instant-threshold)."
+        ),
+    )
+    train_parser.add_argument(
+        "--force-threshold",
+        type=float,
+        default=DEFAULT_FORCE_THRESHOLD_N,
+        help="Threshold in force units for --force-penalty-mode relu_threshold.",
+    )
     train_parser.add_argument(
         "--force-region",
         choices=("whole_wire", "tip_only"),
@@ -179,6 +196,16 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--force-alpha", type=float, default=0.1)
     doctor_parser.add_argument("--force-beta", type=float, default=1.0)
     doctor_parser.add_argument(
+        "--force-penalty-mode",
+        choices=("linear_terminal_log", "relu_threshold"),
+        default="linear_terminal_log",
+    )
+    doctor_parser.add_argument(
+        "--force-threshold",
+        type=float,
+        default=DEFAULT_FORCE_THRESHOLD_N,
+    )
+    doctor_parser.add_argument(
         "--force-region",
         choices=("whole_wire", "tip_only"),
         default="whole_wire",
@@ -203,6 +230,8 @@ def build_doctor_config_from_args(args: argparse.Namespace) -> DoctorConfig:
         reward_profile=args.reward_profile,
         force_alpha=args.force_alpha,
         force_beta=args.force_beta,
+        force_penalty_mode=args.force_penalty_mode,
+        force_threshold_N=args.force_threshold,
         force_region=args.force_region,
         resume_from=args.resume_from,
         resume_replay_buffer_from=args.resume_replay_buffer_from,
@@ -225,6 +254,8 @@ def build_training_config_from_args(args: argparse.Namespace):
         reward_profile=args.reward_profile,
         force_alpha=args.force_alpha,
         force_beta=args.force_beta,
+        force_penalty_mode=args.force_penalty_mode,
+        force_threshold_N=args.force_threshold,
         force_region=args.force_region,
         trainer_device=args.trainer_device,
         worker_device=args.worker_device,

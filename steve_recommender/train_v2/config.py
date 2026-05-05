@@ -32,13 +32,14 @@ DEFAULT_TORCH_THREADS = 1
 DEFAULT_TORCH_INTEROP_THREADS = 1
 DEFAULT_LOG_INTERVAL_S = 600.0
 DEFAULT_TARGET_BRANCHES = ("lcca",)
-DEFAULT_FRICTION_MU = 0.01
+DEFAULT_FRICTION_MU = 0.1
 DEFAULT_FLUORO_FREQUENCY_HZ = 7.5
 DEFAULT_FLUORO_ROT_ZX_DEG = (20.0, 5.0)
 DEFAULT_FORCE_ALPHA = 0.1
 DEFAULT_FORCE_BETA = 1.0
 DEFAULT_FORCE_REGION = "whole_wire"
-DEFAULT_FORCE_TELEMETRY_MODE = "constraint_projected_si_validated"
+DEFAULT_FORCE_THRESHOLD_N = 0.8
+DEFAULT_FORCE_TELEMETRY_MODE = "passive"
 DEFAULT_REWARD_PROFILE = "default"
 DEFAULT_STEP_TRACE_EVERY_N_STEPS = 10
 ARCHVAR_EVAL_SEEDS: Tuple[int, ...] = (
@@ -147,6 +148,7 @@ RewardProfile = Literal[
     "default_plus_normal_force_penalty",
 ]
 ForceRegion = Literal["whole_wire", "tip_only"]
+ForcePenaltyMode = Literal["linear_terminal_log", "relu_threshold"]
 ForceTelemetryMode = Literal[
     "passive", "intrusive_lcp", "constraint_projected_si_validated"
 ]
@@ -187,6 +189,8 @@ class RewardSpec:
     force_alpha: float = DEFAULT_FORCE_ALPHA
     force_beta: float = DEFAULT_FORCE_BETA
     force_region: ForceRegion = DEFAULT_FORCE_REGION
+    force_penalty_mode: ForcePenaltyMode = "linear_terminal_log"
+    force_threshold_N: float = DEFAULT_FORCE_THRESHOLD_N
     force_telemetry_mode: ForceTelemetryMode = DEFAULT_FORCE_TELEMETRY_MODE
 
     def __post_init__(self) -> None:
@@ -202,9 +206,17 @@ class RewardSpec:
         _require_non_negative_float(
             self.force_beta, field_name="force_beta"
         )
+        _require_non_negative_float(
+            self.force_threshold_N, field_name="force_threshold_N"
+        )
         if self.force_region not in {"whole_wire", "tip_only"}:
             raise ValueError(
                 "force_region must be one of {'whole_wire', 'tip_only'}"
+            )
+        if self.force_penalty_mode not in {"linear_terminal_log", "relu_threshold"}:
+            raise ValueError(
+                "force_penalty_mode must be one of "
+                "{'linear_terminal_log', 'relu_threshold'}"
             )
 
 
@@ -328,6 +340,8 @@ def build_doctor_config(
     force_alpha: float = DEFAULT_FORCE_ALPHA,
     force_beta: float = DEFAULT_FORCE_BETA,
     force_region: ForceRegion = DEFAULT_FORCE_REGION,
+    force_penalty_mode: ForcePenaltyMode = "linear_terminal_log",
+    force_threshold_N: float = DEFAULT_FORCE_THRESHOLD_N,
     resume_from: Optional[Path] = None,
     resume_replay_buffer_from: Optional[Path] = None,
     trainer_device: str = DEFAULT_POLICY_DEVICE,
@@ -351,6 +365,8 @@ def build_doctor_config(
             force_alpha=force_alpha,
             force_beta=force_beta,
             force_region=force_region,
+            force_penalty_mode=force_penalty_mode,
+            force_threshold_N=force_threshold_N,
         ),
         trainer_device=trainer_device,
         output_root=Path(output_root),
@@ -376,6 +392,8 @@ def build_training_config(
     force_alpha: float = DEFAULT_FORCE_ALPHA,
     force_beta: float = DEFAULT_FORCE_BETA,
     force_region: ForceRegion = DEFAULT_FORCE_REGION,
+    force_penalty_mode: ForcePenaltyMode = "linear_terminal_log",
+    force_threshold_N: float = DEFAULT_FORCE_THRESHOLD_N,
     trainer_device: str = DEFAULT_POLICY_DEVICE,
     worker_device: str = DEFAULT_WORKER_DEVICE,
     replay_device: str = DEFAULT_REPLAY_DEVICE,
@@ -428,6 +446,8 @@ def build_training_config(
             force_alpha=force_alpha,
             force_beta=force_beta,
             force_region=force_region,
+            force_penalty_mode=force_penalty_mode,
+            force_threshold_N=force_threshold_N,
         ),
         trainer_device=trainer_device,
         worker_device=worker_device,

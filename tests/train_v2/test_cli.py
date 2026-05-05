@@ -45,6 +45,10 @@ def test_train_parser_supports_normal_force_reward_flags():
             "0.25",
             "--force-beta",
             "1.5",
+            "--force-penalty-mode",
+            "relu_threshold",
+            "--force-threshold",
+            "0.8",
             "--force-region",
             "tip_only",
         ]
@@ -55,6 +59,8 @@ def test_train_parser_supports_normal_force_reward_flags():
     assert cfg.reward.profile == "default_plus_normal_force_penalty"
     assert cfg.reward.force_alpha == 0.25
     assert cfg.reward.force_beta == 1.5
+    assert cfg.reward.force_penalty_mode == "relu_threshold"
+    assert cfg.reward.force_threshold_N == pytest.approx(0.8)
     assert cfg.reward.force_region == "tip_only"
 
 
@@ -79,7 +85,7 @@ def test_train_parser_supports_step_trace_h5_flags():
     assert cfg.step_trace_every_n_steps == 7
 
 
-def test_train_parser_rejects_removed_force_flags():
+def test_train_parser_rejects_unknown_force_penalty_mode():
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -89,8 +95,8 @@ def test_train_parser_rejects_removed_force_flags():
                 "legacy-force",
                 "--tool",
                 "steve_default/standard_j",
-                "--force-threshold",
-                "0.9",
+                "--force-penalty-mode",
+                "unknown",
             ]
         )
 

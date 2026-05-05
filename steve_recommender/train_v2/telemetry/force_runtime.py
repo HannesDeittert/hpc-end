@@ -28,6 +28,12 @@ class ForceRewardSample:
     wire_force_normal_trial_max_N: float
     tip_force_normal_instant_N: float
     tip_force_normal_trial_max_N: float
+    validation_status: str = "unknown"
+    source: str = ""
+    channel: str = ""
+    quality_tier: str = "unavailable"
+    available_for_score: bool = False
+    lcp_mapped_wall_row_count_max: int = 0
 
 
 class ForceRuntime:
@@ -37,18 +43,29 @@ class ForceRuntime:
         needs_units = (
             reward_spec.force_telemetry_mode == "constraint_projected_si_validated"
         )
-        spec = ForceTelemetrySpec(
+        self._spec = ForceTelemetrySpec(
             mode=reward_spec.force_telemetry_mode,
             units=_DEFAULT_UNITS if needs_units else None,
             write_full_trace=False,
             write_diagnostics=False,
         )
-        self._collector = EvalV2ForceTelemetryCollector(
-            spec=spec,
-            action_dt_s=action_dt_s,
-        )
+        self._action_dt_s = float(action_dt_s)
+        self._collector = self._build_collector()
         self._last_status = ForceRuntimeStatus(False, "uninitialized", "")
         self._logged_status_signature: tuple[str, str, bool] | None = None
+
+    def _build_collector(self) -> EvalV2ForceTelemetryCollector:
+        return EvalV2ForceTelemetryCollector(
+            spec=self._spec,
+            action_dt_s=self._action_dt_s,
+        )
+
+    def reset_episode(self, *, intervention: Any) -> ForceRuntimeStatus:
+        self._collector = self._build_collector()
+        self._last_status = ForceRuntimeStatus(False, "uninitialized", "")
+        self._logged_status_signature = None
+        self._maybe_bind_anatomy_mesh_path(intervention=intervention)
+        return self.ensure_runtime(intervention=intervention)
 
     def ensure_runtime(self, *, intervention: Any) -> ForceRuntimeStatus:
         self._maybe_bind_anatomy_mesh_path(intervention=intervention)
@@ -123,6 +140,16 @@ class ForceRuntime:
             ),
             tip_force_normal_trial_max_N=float(
                 summary.tip_force_normal_trial_max_N or 0.0
+            ),
+            validation_status=str(getattr(summary, "validation_status", "unknown")),
+            source=str(getattr(summary, "source", "") or ""),
+            channel=str(getattr(summary, "channel", "") or ""),
+            quality_tier=str(getattr(summary, "quality_tier", "unavailable")),
+            available_for_score=bool(
+                getattr(summary, "available_for_score", False)
+            ),
+            lcp_mapped_wall_row_count_max=int(
+                getattr(summary, "lcp_mapped_wall_row_count_max", 0) or 0
             ),
         )
 

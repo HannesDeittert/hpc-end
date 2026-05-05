@@ -87,7 +87,12 @@ class _Resettable:
 class _ForceTelemetry:
     def __init__(self, configured=True):
         self.calls = 0
+        self.reset_calls = 0
         self.configured = configured
+
+    def reset_episode(self, *, intervention):
+        self.reset_calls += 1
+        return self.ensure_runtime(intervention=intervention)
 
     def ensure_runtime(self, *, intervention):
         self.calls += 1
@@ -145,6 +150,7 @@ def test_train_v2_env_binds_force_telemetry_after_reset():
 
     env.reset()
 
+    assert telemetry.reset_calls == 1
     assert telemetry.calls == 1
 
 

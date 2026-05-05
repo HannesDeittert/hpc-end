@@ -37,6 +37,26 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--target-branches", default="bct,lcca,lsa")
     parser.add_argument("--probe-cluster", action="store_true", help="Probe Slurm and derive partition weights from it")
     parser.add_argument("--partitions", default=None, help="Explicit partition weights, e.g. work:0.7,rtx3080:0.3")
+    write_trace_group = parser.add_mutually_exclusive_group()
+    write_trace_group.add_argument(
+        "--write-trace",
+        dest="write_full_trace",
+        action="store_true",
+        help="Enable per-trial HDF5 trace files for generated jobs.",
+    )
+    write_trace_group.add_argument(
+        "--no-write-trace",
+        dest="write_full_trace",
+        action="store_false",
+        help="Disable per-trial HDF5 trace files for generated jobs.",
+    )
+    parser.add_argument(
+        "--write-diagnostics",
+        action="store_true",
+        default=False,
+        help="Write optional diagnostic datasets into trial trace files.",
+    )
+    parser.set_defaults(write_full_trace=True)
     return parser.parse_args()
 
 
@@ -90,6 +110,10 @@ def main() -> int:
         "--max-episode-steps",
         str(args.max_episode_steps),
     ]
+    if not args.write_full_trace:
+        generator_cmd.append("--no-write-trace")
+    if args.write_diagnostics:
+        generator_cmd.append("--write-diagnostics")
     if args.trial_count is not None:
         generator_cmd.extend(["--trial-count", str(args.trial_count)])
     if args.probe_cluster:

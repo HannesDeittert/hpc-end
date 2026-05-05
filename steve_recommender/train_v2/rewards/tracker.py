@@ -35,6 +35,9 @@ class RewardTracker(Reward):
     ) -> None:
         self._names = [n for n, _ in components]
         self._rewards = [r for _, r in components]
+        self._force_component_index = (
+            self._names.index("force") if "force" in self._names else None
+        )
         self._csv_base = Path(csv_path) if csv_path is not None else None
         self._csv_resolved: Optional[Path] = None
         self._episode_totals = [0.0] * len(self._rewards)
@@ -68,13 +71,90 @@ class RewardTracker(Reward):
             self._csv_resolved = self._csv_base.parent / f"{stem}_{os.getpid()}{suffix}"
         return self._csv_resolved
 
+    def _csv_fieldnames(self) -> List[str]:
+        fieldnames = ["episode", "steps", "total", *self._names]
+        if self._force_component_index is not None:
+            fieldnames.extend(
+                [
+                    "force_step_penalty",
+                    "force_terminal_penalty",
+                    "wire_force_normal_instant_N",
+                    "wire_force_normal_trial_max_N",
+                    "tip_force_normal_instant_N",
+                    "tip_force_normal_trial_max_N",
+                    "force_validation_status",
+                    "force_source",
+                    "force_channel",
+                    "force_quality_tier",
+                    "force_available_for_score",
+                    "lcp_mapped_wall_row_count_max",
+                ]
+            )
+        return fieldnames
+
     def _ensure_header(self) -> None:
         path = self._resolved_path()
         if path is None or path.exists():
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
-            f.write("episode,steps,total," + ",".join(self._names) + "\n")
+            f.write(",".join(self._csv_fieldnames()) + "\n")
+
+    def _force_snapshot(self) -> Dict[str, object]:
+        snapshot = {
+            "force_step_penalty": 0.0,
+            "force_terminal_penalty": 0.0,
+            "wire_force_normal_instant_N": 0.0,
+            "wire_force_normal_trial_max_N": 0.0,
+            "tip_force_normal_instant_N": 0.0,
+            "tip_force_normal_trial_max_N": 0.0,
+            "force_validation_status": "unknown",
+            "force_source": "",
+            "force_channel": "",
+            "force_quality_tier": "unavailable",
+            "force_available_for_score": 0,
+            "lcp_mapped_wall_row_count_max": 0,
+        }
+        if self._force_component_index is None:
+            return snapshot
+        force_component = self._rewards[self._force_component_index]
+        snapshot["force_step_penalty"] = float(
+            getattr(force_component, "last_step_penalty", 0.0)
+        )
+        snapshot["force_terminal_penalty"] = float(
+            getattr(force_component, "last_terminal_penalty", 0.0)
+        )
+        snapshot["wire_force_normal_instant_N"] = float(
+            getattr(force_component, "last_wire_force_normal_instant_N", 0.0)
+        )
+        snapshot["wire_force_normal_trial_max_N"] = float(
+            getattr(force_component, "last_wire_force_normal_trial_max_N", 0.0)
+        )
+        snapshot["tip_force_normal_instant_N"] = float(
+            getattr(force_component, "last_tip_force_normal_instant_N", 0.0)
+        )
+        snapshot["tip_force_normal_trial_max_N"] = float(
+            getattr(force_component, "last_tip_force_normal_trial_max_N", 0.0)
+        )
+        snapshot["force_validation_status"] = str(
+            getattr(force_component, "last_force_validation_status", "unknown")
+        )
+        snapshot["force_source"] = str(
+            getattr(force_component, "last_force_source", "") or ""
+        )
+        snapshot["force_channel"] = str(
+            getattr(force_component, "last_force_channel", "") or ""
+        )
+        snapshot["force_quality_tier"] = str(
+            getattr(force_component, "last_force_quality_tier", "unavailable")
+        )
+        snapshot["force_available_for_score"] = int(
+            bool(getattr(force_component, "last_force_available_for_score", False))
+        )
+        snapshot["lcp_mapped_wall_row_count_max"] = int(
+            getattr(force_component, "last_lcp_mapped_wall_row_count_max", 0) or 0
+        )
+        return snapshot
 
     def step(self) -> None:
         total = 0.0
@@ -103,30 +183,7 @@ class RewardTracker(Reward):
         }
         for name, value in self._last_step_components.items():
             snapshot[f"reward_{name}"] = float(value)
-        force_component = None
-        for name, reward in zip(self._names, self._rewards):
-            if name == "force":
-                force_component = reward
-                break
-        if force_component is not None:
-            snapshot["force_step_penalty"] = float(
-                getattr(force_component, "last_step_penalty", 0.0)
-            )
-            snapshot["force_terminal_penalty"] = float(
-                getattr(force_component, "last_terminal_penalty", 0.0)
-            )
-            snapshot["wire_force_normal_instant_N"] = float(
-                getattr(force_component, "last_wire_force_normal_instant_N", 0.0)
-            )
-            snapshot["wire_force_normal_trial_max_N"] = float(
-                getattr(force_component, "last_wire_force_normal_trial_max_N", 0.0)
-            )
-            snapshot["tip_force_normal_instant_N"] = float(
-                getattr(force_component, "last_tip_force_normal_instant_N", 0.0)
-            )
-            snapshot["tip_force_normal_trial_max_N"] = float(
-                getattr(force_component, "last_tip_force_normal_trial_max_N", 0.0)
-            )
+        snapshot.update(self._force_snapshot())
         return snapshot
 
     def _flush_episode(self) -> None:
@@ -145,11 +202,21 @@ class RewardTracker(Reward):
         path = self._resolved_path()
         if path is not None:
             self._ensure_header()
-            row = (
-                f"{self._episode_nr},{self._step_count},{total:.6f},"
-                + ",".join(f"{v:.6f}" for v in self._episode_totals)
-                + "\n"
-            )
+            force_snapshot = self._force_snapshot()
+            row_parts = [
+                str(self._episode_nr),
+                str(self._step_count),
+                f"{total:.6f}",
+                *[f"{v:.6f}" for v in self._episode_totals],
+            ]
+            if self._force_component_index is not None:
+                for name in self._csv_fieldnames()[3 + len(self._names) :]:
+                    value = force_snapshot[name]
+                    if isinstance(value, float):
+                        row_parts.append(f"{value:.6f}")
+                    else:
+                        row_parts.append(str(value))
+            row = ",".join(row_parts) + "\n"
             with open(path, "a") as f:
                 f.write(row)
 

@@ -150,6 +150,74 @@ def test_normal_force_penalty_reward_can_use_tip_region():
     assert reward.reward == pytest.approx(-0.05)
 
 
+def test_normal_force_relu_threshold_penalty_ignores_force_below_threshold():
+    terminal = DummyTerminal()
+    truncation = DummyTruncation()
+    reward = NormalForcePenaltyReward(
+        intervention=object(),
+        telemetry=SequenceTelemetry([_sample(wire_instant=0.7, wire_trial_max=1.2)]),
+        terminal=terminal,
+        truncation=truncation,
+        alpha=0.1,
+        beta=1.0,
+        force_region="whole_wire",
+        penalty_mode="relu_threshold",
+        threshold_N=0.8,
+    )
+    terminal.terminal = True
+
+    reward.step()
+
+    assert reward.reward == pytest.approx(0.0)
+    assert reward.last_step_penalty == pytest.approx(0.0)
+    assert reward.last_terminal_penalty == pytest.approx(0.0)
+
+
+def test_normal_force_relu_threshold_penalty_uses_excess_instant_force_only():
+    terminal = DummyTerminal()
+    truncation = DummyTruncation()
+    reward = NormalForcePenaltyReward(
+        intervention=object(),
+        telemetry=SequenceTelemetry([_sample(wire_instant=1.1, wire_trial_max=2.0)]),
+        terminal=terminal,
+        truncation=truncation,
+        alpha=0.1,
+        beta=1.0,
+        force_region="whole_wire",
+        penalty_mode="relu_threshold",
+        threshold_N=0.8,
+    )
+    terminal.terminal = True
+
+    reward.step()
+
+    assert reward.reward == pytest.approx(-0.03)
+    assert reward.last_step_penalty == pytest.approx(-0.03)
+    assert reward.last_terminal_penalty == pytest.approx(0.0)
+
+
+def test_normal_force_relu_threshold_penalty_can_use_tip_region():
+    terminal = DummyTerminal()
+    truncation = DummyTruncation()
+    reward = NormalForcePenaltyReward(
+        intervention=object(),
+        telemetry=SequenceTelemetry(
+            [_sample(wire_instant=1.4, wire_trial_max=1.4, tip_instant=1.1, tip_trial_max=1.2)]
+        ),
+        terminal=terminal,
+        truncation=truncation,
+        alpha=0.2,
+        beta=1.0,
+        force_region="tip_only",
+        penalty_mode="relu_threshold",
+        threshold_N=0.8,
+    )
+
+    reward.step()
+
+    assert reward.reward == pytest.approx(-0.06)
+
+
 def test_normal_force_penalty_reward_exposes_debug_components():
     terminal = DummyTerminal()
     truncation = DummyTruncation()

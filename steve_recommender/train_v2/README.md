@@ -110,6 +110,8 @@ python -m steve_recommender.train_v2 doctor [OPTIONS]
 | `--reward-profile PROFILE` | `default` | `default` or `default_plus_normal_force_penalty`. |
 | `--force-alpha F` | `0.1` | Per-step penalty weight: `alpha × wire_force_normal_instant_N`. Active when profile is `default_plus_normal_force_penalty`. |
 | `--force-beta F` | `1.0` | Terminal/truncation penalty weight: `beta × wire_force_normal_trial_max_N`. Active when profile is `default_plus_normal_force_penalty`. |
+| `--force-penalty-mode MODE` | `linear_terminal_log` | Force penalty shape: `linear_terminal_log` or `relu_threshold`. |
+| `--force-threshold F` | `0.8` | Threshold for `relu_threshold`: penalize only force above this value. |
 | `--force-region REGION` | `whole_wire` | `whole_wire` or `tip`. Selects which region's normal force is used in the penalty. |
 
 ### Resume
@@ -167,6 +169,8 @@ Shares most flags with `train`. Doctor-specific flags:
     main.log                           # training log
     env_train.yml                      # saved env config
     env_eval.yml
+    reward_train_<pid>.csv             # per-episode reward + force diagnostics
+    reward_eval_<pid>.csv
     checkpoints/
       *.everl                          # agent checkpoints
       latest_replay_buffer.everl       # replay buffer (if --save-latest-replay-buffer)
@@ -212,9 +216,28 @@ where:
 Default parameters:
 - `alpha = 0.1`
 - `beta = 1.0`
+- `penalty_mode = linear_terminal_log`
+- `force_threshold = 0.8`
 - `region = whole_wire`
 
 With `--force-region tip`, the tip-region quantities (`tip_force_normal_instant_N`, `tip_force_normal_trial_max_N`) are used instead.
+
+With `--force-penalty-mode relu_threshold`, the force component is:
+
+```
+R_force = -alpha × max(0, F_instant - force_threshold)
+```
+
+This mode has no terminal force penalty; `--force-beta` is ignored for it.
+
+The per-episode reward CSV also stores the raw force diagnostics that generate the force term:
+
+- `force_step_penalty`
+- `force_terminal_penalty`
+- `wire_force_normal_instant_N`
+- `wire_force_normal_trial_max_N`
+- `tip_force_normal_instant_N`
+- `tip_force_normal_trial_max_N`
 
 ---
 
@@ -235,6 +258,12 @@ SOFA LCP solver
 2. `ForceRuntime` calls `EvalV2ForceTelemetryCollector.capture_step()`, which reads `constraintForces` from the SOFA LCP object and projects them to per-DOF world-space forces.
 3. `sample_step()` returns a `ForceRewardSample` with four fields: `wire_force_normal_instant_N`, `wire_force_normal_trial_max_N`, `tip_force_normal_instant_N`, `tip_force_normal_trial_max_N`.
 4. `ForceComponent` reads the appropriate field (based on `--force-region`) and computes the penalty.
+
+`train_v2` intentionally uses the same force telemetry default as `eval_v2`:
+`ForceTelemetrySpec(mode="passive", units=None)`. This keeps the reward term
+on the same scale as existing `eval_v2` reports. Do not compare these values
+against runs collected with `constraint_projected_si_validated`, because that
+mode applies explicit scene-unit-to-SI scaling.
 
 **Why surface-normal force?**
 

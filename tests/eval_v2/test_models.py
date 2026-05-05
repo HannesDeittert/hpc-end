@@ -79,7 +79,7 @@ def _anatomy(
 def _scenario(
     *,
     name: str = "scenario_a",
-    friction: float = 0.001,
+    friction: float = 0.1,
     fluoroscopy: FluoroscopySpec | None = None,
     target: BranchEndTarget | BranchIndexTarget | ManualTarget | None = None,
 ) -> EvaluationScenario:

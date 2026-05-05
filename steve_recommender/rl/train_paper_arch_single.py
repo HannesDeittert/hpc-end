@@ -63,7 +63,7 @@ def build_intervention(tool_name: str, seed: int = 30) -> eve.intervention.MonoP
     device = make_device(tool_name)
 
     simulation = eve.intervention.simulation.sofabeamadapter.SofaBeamAdapter(
-        friction=0.001
+        friction=0.1
     )
     fluoroscopy = eve.intervention.fluoroscopy.TrackingOnly(
         simulation=simulation,
