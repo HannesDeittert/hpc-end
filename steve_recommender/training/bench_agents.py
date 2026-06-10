@@ -187,7 +187,7 @@ class ResumableSynchron(_CheckpointMixin, eve_rl.agent.Synchron):
     def load_checkpoint(self, file_path: str) -> None:
         checkpoint = _load_trusted_checkpoint(
             file_path,
-            map_location=_checkpoint_map_location(self.trainer_device),
+            map_location=torch.device("cpu"),
         )
         self._load_checkpoint_state(checkpoint, checkpoint_path=Path(file_path))
         self._worker_load_state_dicts_network(self.algo.state_dicts_network())

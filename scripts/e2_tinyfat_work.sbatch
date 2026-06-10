@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --hint=multithread
 #SBATCH --time=24:00:00
-#SBATCH --array=0-9999
+#SBATCH --array=0-4999
 #SBATCH --output=/home/hannes-deittert/dev/Uni/master-project/results/master_thesis/e2_tinyfat/logs/slurm-%A_%a.out
 #SBATCH --error=/home/hannes-deittert/dev/Uni/master-project/results/master_thesis/e2_tinyfat/logs/slurm-%A_%a.err
 #SBATCH --export=NONE

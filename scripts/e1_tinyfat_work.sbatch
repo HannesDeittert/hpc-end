@@ -33,4 +33,5 @@ exec "$PYTHON_BIN" scripts/e1_tinyfat_friction_01_runner.py \
   --array-index "$SLURM_ARRAY_TASK_ID" \
   --wires-json results/master_thesis/e1_tinyfat_friction_01/metadata/wires.json \
   --worker-count "$E1_WORKER_COUNT" \
+  --friction "$E1_FRICTION" \
   --no-write-trace

@@ -601,6 +601,17 @@ def _write_report_artifacts(
             "job_name": report.job_name,
             "generated_time": report.generated_at,
             "anatomy_metadata": anatomy_metadata,
+            "scenario_metadata": [
+                {
+                    "name": scenario.name,
+                    "friction": scenario.friction,
+                    "stop_device_at_tree_end": scenario.stop_device_at_tree_end,
+                    "normalize_action": scenario.normalize_action,
+                    "force_telemetry": _jsonable(scenario.force_telemetry),
+                    "fluoroscopy": _jsonable(scenario.fluoroscopy),
+                }
+                for scenario in job.scenarios
+            ],
             "targets": [_jsonable(scenario.target) for scenario in job.scenarios],
             "wires": [_jsonable(candidate.execution_wire) for candidate in job.candidates],
             "candidates": [_jsonable(candidate) for candidate in job.candidates],

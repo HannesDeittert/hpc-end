@@ -354,6 +354,8 @@ def build_sbatch_script(
     worker_count = int(first_row.get("worker_count", partition_profile(partition)["worker_count"]))
     hint = str(first_row.get("hint", "nomultithread"))
     friction = float(first_row.get("friction", payload.get("friction", 0.1)))
+    trace_flag = "--write-trace" if bool(first_row.get("write_full_trace", True)) else "--no-write-trace"
+    diagnostics_flag = " --write-diagnostics" if bool(first_row.get("write_diagnostics", False)) else ""
     job_name = f"e1_tinyfat_{partition}"
     return f"""#!/bin/bash -l
 #SBATCH --job-name={job_name}
@@ -385,54 +387,10 @@ export E1_JOB_MANIFEST="{jobs_manifest_path}"
 export E1_WORKER_COUNT="{worker_count}"
 export E1_FRICTION="{friction}"
 
-exec "$PYTHON_BIN" - <<'PY'
-from __future__ import annotations
-
-import os
-import runpy
-import sys
-
-module_ns = runpy.run_path("experiments/master-thesis/run_e1_cell.py")
-friction = float(os.environ.get("E1_FRICTION", "{friction}"))
-
-
-def _build_scenario(*, anatomy_id, target_spec, service, write_full_trace, write_diagnostics):
-    anatomy = service.get_anatomy(record_id=anatomy_id)
-    target = module_ns["CenterlineRandomTarget"](
-        threshold_mm=float(target_spec.get("threshold_mm", 5.0)),
-        branches=tuple(str(branch) for branch in target_spec.get("branches", ())),
-        seed=int(target_spec["target_seed"]),
-    )
-    return module_ns["EvaluationScenario"](
-        name="%s__target_%d" % (anatomy_id, int(target_spec.get("target_index", 0))),
-        anatomy=anatomy,
-        target=target,
-        fluoroscopy=module_ns["FluoroscopySpec"](),
-        force_telemetry=module_ns["ForceTelemetrySpec"](
-            mode="passive",
-            required=False,
-            tip_threshold_mm=float(target_spec.get("threshold_mm", 5.0)),
-            write_full_trace=bool(write_full_trace),
-            write_diagnostics=bool(write_diagnostics),
-            plugin_path=None,
-            units=None,
-        ),
-        friction=friction,
-    )
-
-
-module_ns["_build_scenario"] = _build_scenario
-raise SystemExit(
-    module_ns["main"](
-        [
-            "--manifest",
-            os.environ["E1_JOB_MANIFEST"],
-            "--array-index",
-            os.environ["SLURM_ARRAY_TASK_ID"],
-            "--worker-count",
-            os.environ["E1_WORKER_COUNT"],
-        ]
-    )
-)
-PY
+exec "$PYTHON_BIN" experiments/master-thesis/run_e1_cell.py \
+  --manifest "$E1_JOB_MANIFEST" \
+  --array-index "$SLURM_ARRAY_TASK_ID" \
+  --worker-count "$E1_WORKER_COUNT" \
+  --friction "$E1_FRICTION" \
+  {trace_flag}{diagnostics_flag}
 """

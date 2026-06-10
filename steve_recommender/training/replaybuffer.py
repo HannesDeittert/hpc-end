@@ -14,19 +14,41 @@ from eve_rl.replaybuffer.vanillashared import VanillaSharedBase as _VanillaShare
 from eve_rl.replaybuffer.vanillashared import VanillaStepShared as _VanillaStepShared
 
 
+def _canonicalize_replay_payload(obj: Any) -> Any:
+    """Detach replay-buffer payloads from process-local CUDA storage.
+
+    Resumed replay buffers are restored inside a dedicated replay-buffer worker
+    process and later re-sampled to trainer/worker processes. If the serialized
+    state contains CUDA tensors originating from a different process, PyTorch
+    refuses to share them again across multiprocessing queues.
+
+    Canonicalizing all tensors to owned CPU clones makes the replay-buffer state
+    process-local and safe to re-materialize on the sampling device later.
+    """
+    if isinstance(obj, torch.Tensor):
+        return obj.detach().to("cpu").clone()
+    if isinstance(obj, dict):
+        return {key: _canonicalize_replay_payload(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_canonicalize_replay_payload(value) for value in obj]
+    if isinstance(obj, tuple):
+        return tuple(_canonicalize_replay_payload(value) for value in obj)
+    return deepcopy(obj)
+
+
 class ResumableVanillaEpisode(eve_rl.replaybuffer.VanillaEpisode):
     def state_dict(self) -> Dict[str, Any]:
         return {
             "capacity": self.capacity,
             "batch_size": self.batch_size,
-            "buffer": deepcopy(self.buffer),
+            "buffer": _canonicalize_replay_payload(self.buffer),
             "position": self.position,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.capacity = int(state_dict["capacity"])
         self._batch_size = int(state_dict["batch_size"])
-        self.buffer = deepcopy(state_dict["buffer"])
+        self.buffer = _canonicalize_replay_payload(state_dict["buffer"])
         self.position = int(state_dict["position"])
 
     def get_config_dict(self) -> Dict[str, Any]:
@@ -43,14 +65,14 @@ class ResumableVanillaStep(eve_rl.replaybuffer.VanillaStep):
         return {
             "capacity": self.capacity,
             "batch_size": self.batch_size,
-            "buffer": deepcopy(self.buffer),
+            "buffer": _canonicalize_replay_payload(self.buffer),
             "position": self.position,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.capacity = int(state_dict["capacity"])
         self._batch_size = int(state_dict["batch_size"])
-        self.buffer = deepcopy(state_dict["buffer"])
+        self.buffer = _canonicalize_replay_payload(state_dict["buffer"])
         self.position = int(state_dict["position"])
 
     def get_config_dict(self) -> Dict[str, Any]:

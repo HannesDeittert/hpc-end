@@ -141,6 +141,14 @@ if __name__ == "__main__":
         default=None,
         help="Override SimulationMP step timeout in seconds.",
     )
+    parser.add_argument(
+        "--skip-save-config",
+        action="store_true",
+        help=(
+            "Skip env/runner config serialization. Useful for local or debug runs "
+            "where confighandler introspection can block before training starts."
+        ),
+    )
 
     parser.add_argument(
         "-lr",
@@ -310,10 +318,11 @@ if __name__ == "__main__":
         False,
     )
 
-    env_train_config = os.path.join(config_folder, "env_train.yml")
-    env_train.save_config(env_train_config)
-    env_eval_config = os.path.join(config_folder, "env_eval.yml")
-    env_eval.save_config(env_eval_config)
+    if not args.skip_save_config:
+        env_train_config = os.path.join(config_folder, "env_train.yml")
+        env_train.save_config(env_train_config)
+        env_eval_config = os.path.join(config_folder, "env_eval.yml")
+        env_eval.save_config(env_eval_config)
 
     infos = list(env_eval.info.info.keys())
     runner = Runner(
@@ -326,8 +335,9 @@ if __name__ == "__main__":
         info_results=infos,
         quality_info="success",
     )
-    runner_config = os.path.join(config_folder, "runner.yml")
-    runner.save_config(runner_config)
+    if not args.skip_save_config:
+        runner_config = os.path.join(config_folder, "runner.yml")
+        runner.save_config(runner_config)
 
     heatup_steps_to_run = heatup_steps
     training_steps_target = training_steps

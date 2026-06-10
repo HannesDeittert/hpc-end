@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -55,6 +56,15 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--worker-count", type=int, default=DEFAULT_WORKER_COUNT)
     parser.add_argument("--policy-device", default="cpu")
     parser.add_argument("--threshold-mm", type=float, default=5.0)
+    parser.add_argument(
+        "--friction",
+        type=float,
+        default=None,
+        help=(
+            "Scene friction coefficient. If omitted with --manifest, the job row "
+            "friction is used when present, otherwise the eval_v2 default 0.1 is used."
+        ),
+    )
     parser.add_argument(
         "--no-write-trace",
         action="store_false",
@@ -139,6 +149,7 @@ def _build_scenario(
     service: Any,
     write_full_trace: bool,
     write_diagnostics: bool,
+    friction: float,
 ) -> EvaluationScenario:
     anatomy = service.get_anatomy(record_id=anatomy_id)
     target = CenterlineRandomTarget(
@@ -151,6 +162,7 @@ def _build_scenario(
         anatomy=anatomy,
         target=target,
         fluoroscopy=FluoroscopySpec(),
+        friction=float(friction),
         force_telemetry=ForceTelemetrySpec(
             mode="passive",
             required=False,
@@ -200,6 +212,7 @@ def _job_from_inputs(
     service: Any,
     write_full_trace: bool,
     write_diagnostics: bool,
+    friction: float,
 ) -> EvaluationJob:
     _ = policy_device, threshold_mm
     scenario = _build_scenario(
@@ -208,6 +221,7 @@ def _job_from_inputs(
         service=service,
         write_full_trace=write_full_trace,
         write_diagnostics=write_diagnostics,
+        friction=float(friction),
     )
     wires = _load_wires(wires_json, service)
     candidates = tuple(_build_candidate(service=service, execution_wire=wire) for wire in wires)
@@ -254,6 +268,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.write_diagnostics is None
             else args.write_diagnostics
         )
+        friction = float(row.get("friction", 0.1) if args.friction is None else args.friction)
     else:
         if args.anatomy_id is None or args.target_spec is None or args.config_id is None or args.output_path is None or args.seed_base is None or args.step_budget is None:
             raise ValueError(
@@ -269,6 +284,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         step_budget = int(args.step_budget)
         write_full_trace = True if args.write_full_trace is None else bool(args.write_full_trace)
         write_diagnostics = False if args.write_diagnostics is None else bool(args.write_diagnostics)
+        friction = float(0.1 if args.friction is None else args.friction)
 
     job = _job_from_inputs(
         anatomy_id=anatomy_id,
@@ -285,6 +301,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         service=service,
         write_full_trace=write_full_trace,
         write_diagnostics=write_diagnostics,
+        friction=friction,
+    )
+
+    print(
+        "[E1] scenario_config "
+        f"name={job.scenarios[0].name} "
+        f"friction={job.scenarios[0].friction} "
+        f"env_E1_FRICTION={os.environ.get('E1_FRICTION')} "
+        f"config_id={config_id} "
+        f"seed_base={seed_base} "
+        f"target_seed={target_spec.get('target_seed')}"
     )
 
     report = service.run_evaluation_job(

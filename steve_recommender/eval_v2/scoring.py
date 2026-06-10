@@ -50,7 +50,12 @@ def score_safety(*, force_N: float | None, scoring: ScoringSpec) -> float:
     force_value = max(finite_force, 0.0)
 
     def g(force: float) -> float:
-        return 1.0 / (1.0 + math.exp(float(spec.k) * (float(force) - float(spec.F50_N))))
+        x = float(spec.k) * (float(force) - float(spec.F50_N))
+        if x >= 50.0:
+            return 0.0
+        if x <= -50.0:
+            return 1.0
+        return 1.0 / (1.0 + math.exp(x))
 
     g0 = g(0.0)
     gmax = g(float(spec.F_max_N))
@@ -59,7 +64,9 @@ def score_safety(*, force_N: float | None, scoring: ScoringSpec) -> float:
         logistic_term = 0.0
     else:
         logistic_term = (g(force_value) - gmax) / denominator
+    logistic_term = _clip01(logistic_term)
     polynomial_term = 1.0 - float(spec.c) * (force_value ** float(spec.p))
+    polynomial_term = _clip01(polynomial_term)
     return _clip01(polynomial_term * logistic_term)
 
 
